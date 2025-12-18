@@ -51,6 +51,7 @@ data/languages/ppc_64_isa_le.slaspec||GHIDRA||||END|
 data/languages/ppc_64_isa_vle_be.slaspec||GHIDRA||||END|
 data/languages/ppc_64_le.cspec||GHIDRA||||END|
 data/languages/ppc_64_le.slaspec||GHIDRA||||END|
+data/languages/ppc_64_xenon.slaspec||GHIDRA||||END|
 data/languages/ppc_a2.sinc||GHIDRA||||END|
 data/languages/ppc_common.sinc||GHIDRA||||END|
 data/languages/ppc_embedded.sinc||GHIDRA||||END|
@@ -60,6 +61,7 @@ data/languages/ppc_vle.sinc||GHIDRA||||END|
 data/languages/quicciii.sinc||GHIDRA||||END|
 data/languages/stmwInstructions.sinc||GHIDRA||||END|
 data/languages/stswiInstructions.sinc||GHIDRA||||END|
+data/languages/vmx128.sinc||GHIDRA||||END|
 data/languages/vsx.sinc||GHIDRA||||END|
 data/manuals/PowerISA.idx||GHIDRA||||END|
 data/manuals/PowerPC.idx||GHIDRA||||END|
