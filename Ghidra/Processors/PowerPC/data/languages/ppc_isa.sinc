@@ -1936,6 +1936,7 @@ define pcodeop stfdpOp;
 @endif
 } 
 
+@ifndef NO_STVEPX
 define pcodeop stvepxOp;
 :stvepx S,RA_OR_ZERO,B is OP=31 & S & RA_OR_ZERO & B & XOP_1_10=807 & BIT_0=0  {
 	EA:$(REGISTER_SIZE) = RA_OR_ZERO + B;
@@ -1947,6 +1948,7 @@ define pcodeop stvepxlOp;
 	EA:$(REGISTER_SIZE) = RA_OR_ZERO + B;
 	*[ram]:16 EA = stvepxlOp(S, RA_OR_ZERO, B);
 } 
+@endif
 
 # binutils-descr: "dquaq",	ZRC(63,3,0),	Z2_MASK,     POWER6,	PPCNONE,	{FRT, FRA, FRB, RMC}
 define pcodeop dquaqOp;

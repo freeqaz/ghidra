@@ -13,6 +13,10 @@
 
 @define CTR_OFFSET "32"
 
+# Xenon is based on PowerISA v2.02 which does not have stvepx and stvepxl.
+# They have to be excluded here because their opcodes collide with lvrxl and lvlxl (Cell/Xenon-specific VMX instructions).
+@define NO_STVEPX "1"
+
 @include "ppc_common.sinc"
 @include "ppc_isa.sinc"
 
