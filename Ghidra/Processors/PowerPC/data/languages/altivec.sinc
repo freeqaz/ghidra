@@ -437,14 +437,156 @@ vaddubm_part2: is  vrA_8_8 & vrA_8_9 & vrA_8_10 & vrA_8_11 & vrA_8_12 & vrA_8_13
 }
 
 :vcmpbfp vrD,vrA,vrB	is OP=4 & vrD & vrA & vrB & BIT_10=0 & XOP_0_9=966
-{   # TODO definition
-	vrD = vectorCompareBoundsFloatingPoint(vrA,vrB);
+{
+	# Lane-wise FP compare bounds:
+	# bit 31 set when a > b (not <=), bit 30 set when a < -b (not >=).
+	# NaN sets both bits (0xC0000000).
+	local a_0:4 = vrA[96,32];
+	local a_1:4 = vrA[64,32];
+	local a_2:4 = vrA[32,32];
+	local a_3:4 = vrA[0,32];
+	local b_0:4 = vrB[96,32];
+	local b_1:4 = vrB[64,32];
+	local b_2:4 = vrB[32,32];
+	local b_3:4 = vrB[0,32];
+
+	# Lane 0
+	local res_0:4 = 0;
+	if (nan(a_0) | nan(b_0)) goto <lane0_nan>;
+	local neg_b_0:4 = 0 f- b_0;
+	if (a_0 f<= b_0) goto <lane0_check_low>;
+	res_0 = res_0 | 0x80000000;
+	<lane0_check_low>
+	if (a_0 f>= neg_b_0) goto <lane1>;
+	res_0 = res_0 | 0x40000000;
+	goto <lane1>;
+	<lane0_nan>
+	res_0 = 0xC0000000;
+	<lane1>
+
+	# Lane 1
+	local res_1:4 = 0;
+	if (nan(a_1) | nan(b_1)) goto <lane1_nan>;
+	local neg_b_1:4 = 0 f- b_1;
+	if (a_1 f<= b_1) goto <lane1_check_low>;
+	res_1 = res_1 | 0x80000000;
+	<lane1_check_low>
+	if (a_1 f>= neg_b_1) goto <lane2>;
+	res_1 = res_1 | 0x40000000;
+	goto <lane2>;
+	<lane1_nan>
+	res_1 = 0xC0000000;
+	<lane2>
+
+	# Lane 2
+	local res_2:4 = 0;
+	if (nan(a_2) | nan(b_2)) goto <lane2_nan>;
+	local neg_b_2:4 = 0 f- b_2;
+	if (a_2 f<= b_2) goto <lane2_check_low>;
+	res_2 = res_2 | 0x80000000;
+	<lane2_check_low>
+	if (a_2 f>= neg_b_2) goto <lane3>;
+	res_2 = res_2 | 0x40000000;
+	goto <lane3>;
+	<lane2_nan>
+	res_2 = 0xC0000000;
+	<lane3>
+
+	# Lane 3
+	local res_3:4 = 0;
+	if (nan(a_3) | nan(b_3)) goto <lane3_nan>;
+	local neg_b_3:4 = 0 f- b_3;
+	if (a_3 f<= b_3) goto <lane3_check_low>;
+	res_3 = res_3 | 0x80000000;
+	<lane3_check_low>
+	if (a_3 f>= neg_b_3) goto <done>;
+	res_3 = res_3 | 0x40000000;
+	goto <done>;
+	<lane3_nan>
+	res_3 = 0xC0000000;
+	<done>
+
+	vrD[96,32] = res_0;
+	vrD[64,32] = res_1;
+	vrD[32,32] = res_2;
+	vrD[0,32] = res_3;
 }
 
 :vcmpbfp. vrD,vrA,vrB	is OP=4 & vrD & vrA & vrB & BIT_10=1 & XOP_0_9=966
 {   # TODO definition
 	# TODO change CR6
-	vrD = vectorCompareBoundsFloatingPoint(vrA,vrB);
+	# Lane-wise FP compare bounds:
+	# bit 31 set when a > b (not <=), bit 30 set when a < -b (not >=).
+	# NaN sets both bits (0xC0000000).
+	local a_0:4 = vrA[96,32];
+	local a_1:4 = vrA[64,32];
+	local a_2:4 = vrA[32,32];
+	local a_3:4 = vrA[0,32];
+	local b_0:4 = vrB[96,32];
+	local b_1:4 = vrB[64,32];
+	local b_2:4 = vrB[32,32];
+	local b_3:4 = vrB[0,32];
+
+	# Lane 0
+	local res_0:4 = 0;
+	if (nan(a_0) | nan(b_0)) goto <lane0_nan>;
+	local neg_b_0:4 = 0 f- b_0;
+	if (a_0 f<= b_0) goto <lane0_check_low>;
+	res_0 = res_0 | 0x80000000;
+	<lane0_check_low>
+	if (a_0 f>= neg_b_0) goto <lane1>;
+	res_0 = res_0 | 0x40000000;
+	goto <lane1>;
+	<lane0_nan>
+	res_0 = 0xC0000000;
+	<lane1>
+
+	# Lane 1
+	local res_1:4 = 0;
+	if (nan(a_1) | nan(b_1)) goto <lane1_nan>;
+	local neg_b_1:4 = 0 f- b_1;
+	if (a_1 f<= b_1) goto <lane1_check_low>;
+	res_1 = res_1 | 0x80000000;
+	<lane1_check_low>
+	if (a_1 f>= neg_b_1) goto <lane2>;
+	res_1 = res_1 | 0x40000000;
+	goto <lane2>;
+	<lane1_nan>
+	res_1 = 0xC0000000;
+	<lane2>
+
+	# Lane 2
+	local res_2:4 = 0;
+	if (nan(a_2) | nan(b_2)) goto <lane2_nan>;
+	local neg_b_2:4 = 0 f- b_2;
+	if (a_2 f<= b_2) goto <lane2_check_low>;
+	res_2 = res_2 | 0x80000000;
+	<lane2_check_low>
+	if (a_2 f>= neg_b_2) goto <lane3>;
+	res_2 = res_2 | 0x40000000;
+	goto <lane3>;
+	<lane2_nan>
+	res_2 = 0xC0000000;
+	<lane3>
+
+	# Lane 3
+	local res_3:4 = 0;
+	if (nan(a_3) | nan(b_3)) goto <lane3_nan>;
+	local neg_b_3:4 = 0 f- b_3;
+	if (a_3 f<= b_3) goto <lane3_check_low>;
+	res_3 = res_3 | 0x80000000;
+	<lane3_check_low>
+	if (a_3 f>= neg_b_3) goto <done>;
+	res_3 = res_3 | 0x40000000;
+	goto <done>;
+	<lane3_nan>
+	res_3 = 0xC0000000;
+	<done>
+
+	vrD[96,32] = res_0;
+	vrD[64,32] = res_1;
+	vrD[32,32] = res_2;
+	vrD[0,32] = res_3;
 }
 
 :vcmpeqfp vrD,vrA,vrB	is OP=4 & vrD & vrA & vrB & BIT_10=0 & XOP_0_9=198
