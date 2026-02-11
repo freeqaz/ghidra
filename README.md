@@ -1,5 +1,41 @@
 <img src="Ghidra/Features/Base/src/main/resources/images/GHIDRA_3.png" width="400">
 
+# Ghidra — Xbox 360 (Xenon) Fork
+
+This is a fork of [Ghidra 12.1][upstream] with enhancements for **Xbox 360 reverse engineering**. It adds VMX128 vector instruction support and fixes for MSVC-compiled PowerPC binaries.
+
+## What's Changed
+
+### VMX128 Instruction Support
+The Xbox 360's Xenon CPU uses a custom VMX128 SIMD extension that isn't covered by standard PowerPC definitions. This fork adds:
+
+- **77 VMX128 opcodes** with full SLEIGH disassembly and pcode semantics (decompiler support)
+- A new **`PowerPC:BE:64:Xenon`** language/processor in Ghidra's language list
+- Proper Altivec base integration and a fix for the missing `vadduws` instruction
+
+### MSVC Switch Table Analyzer Fixes
+The Xbox 360 SDK used Microsoft's Visual C++ compiler, which generates switch table patterns that Ghidra's built-in PowerPC analyzer mishandles. This fork fixes three bugs:
+
+1. **Sign-extension**: 16-bit displacements in `rlwinm`+`addis`+`lwzx` patterns are now correctly sign-extended
+2. **`lwzx` detection**: Jump tables using indexed loads (`lwzx`) are now recognized, not just `lwz` with immediate offsets
+3. **Base address**: The switch base address now correctly uses the actual `bctr` location
+
+### Included Ghidra Scripts
+These are bundled in the build under `ghidra_scripts/` and also work standalone with stock Ghidra:
+
+- **`RecoverMSVCSwitchTables.java`** — Batch-recover MSVC switch tables across a program
+- **`TestMSVCSwitchRecovery.java`** — Validate recovered switch tables
+- **`ApplyMapSymbols.java`** — Apply MSVC linker `.map` file symbols to a Ghidra project
+
+## Download
+
+Grab the latest build from the [Releases][fork-releases] page. Extract it and run `ghidraRun`. When importing an Xbox 360 binary, select the **PowerPC:BE:64:Xenon** language.
+
+[upstream]: https://github.com/NationalSecurityAgency/ghidra
+[fork-releases]: https://github.com/freeqaz/ghidra/releases
+
+---
+
 # Ghidra Software Reverse Engineering Framework
 Ghidra is a software reverse engineering (SRE) framework created and maintained by the 
 [National Security Agency][nsa] Research Directorate. This framework includes a suite of 
