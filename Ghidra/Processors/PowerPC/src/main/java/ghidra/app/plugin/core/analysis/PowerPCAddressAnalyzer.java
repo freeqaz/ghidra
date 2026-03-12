@@ -524,7 +524,7 @@ public class PowerPCAddressAnalyzer extends ConstantPropagationAnalyzer {
 			@Override
 			public boolean allowAccess(VarnodeContext context, Address addr) {
 				// Allow access to data memory for switch table reads.
-				// MSVC Xbox 360 stores switch tables in writable sections that may be
+				// MSVC stores switch tables in writable data sections that may be
 				// far from the lhzx instruction, causing VarnodeContext to gate the read.
 				return program.getMemory().contains(addr) &&
 					!program.getMemory().getBlock(addr).isExecute();

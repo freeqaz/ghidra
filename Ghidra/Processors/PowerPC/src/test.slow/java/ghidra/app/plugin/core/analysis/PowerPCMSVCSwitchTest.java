@@ -23,6 +23,7 @@ import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.listing.*;
+import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
@@ -34,7 +35,7 @@ import ghidra.util.task.TaskMonitor;
 /**
  * Tests for MSVC-style switch table recovery in the PowerPC analyzer.
  *
- * MSVC for Xbox 360 generates switch tables using 16-bit relative offsets
+ * MSVC for PowerPC generates switch tables using 16-bit relative offsets
  * loaded via lhzx, unlike GCC/Clang which use 32-bit absolute addresses
  * loaded via lwzx.
  *
@@ -89,7 +90,7 @@ public class PowerPCMSVCSwitchTest extends AbstractGhidraHeadlessIntegrationTest
 		// Code region: executable (0x82001000 - 0x82002FFF)
 		MemoryBlock textBlock = builder.createMemory(".text", CODE_START, 0x2000);
 
-		// Data region: read/write, NOT executable (simulates MSVC .rdata/.data section)
+		// Data region: read/write, NOT executable (simulates MSVC .rdata section)
 		// At 0x82003000 - separate from code to test cross-region table reads
 		MemoryBlock rdataBlock = builder.createMemory(".rdata", TABLE_ADDR, 0x1000);
 
@@ -243,7 +244,7 @@ public class PowerPCMSVCSwitchTest extends AbstractGhidraHeadlessIntegrationTest
 	@Test
 	public void testTableInWritableMemory() {
 		// Verify the table is in writable memory
-		var tableBlock = program.getMemory().getBlock(addr(TABLE_ADDR));
+		MemoryBlock tableBlock = program.getMemory().getBlock(addr(TABLE_ADDR));
 		assertNotNull("Table should be in a memory block", tableBlock);
 		assertTrue("Table block should be writable", tableBlock.isWrite());
 		assertFalse("Table block should NOT be executable", tableBlock.isExecute());
@@ -259,7 +260,7 @@ public class PowerPCMSVCSwitchTest extends AbstractGhidraHeadlessIntegrationTest
 	 */
 	@Test
 	public void testSwitchTableData() throws Exception {
-		var memory = program.getMemory();
+		Memory memory = program.getMemory();
 
 		// Read the 3 halfword entries
 		int entry0 = memory.getShort(addr(TABLE_ADDR)) & 0xFFFF;
@@ -275,5 +276,51 @@ public class PowerPCMSVCSwitchTest extends AbstractGhidraHeadlessIntegrationTest
 		assertEquals("Target 0", 0x82001100L, codeBase + entry0);
 		assertEquals("Target 1", 0x82001200L, codeBase + entry1);
 		assertEquals("Target 2", 0x82001300L, codeBase + entry2);
+	}
+
+	/**
+	 * Test that PowerPCAddressAnalyzer recovers switch targets from the
+	 * synthetic MSVC switch pattern.
+	 *
+	 * This exercises all three bug fixes:
+	 * 1. allowAccess() permits reads from non-executable data sections
+	 * 2. targetList is cleared between switch locations
+	 * 3. Predecessor block walk goes 2 levels deep for MSVC patterns
+	 */
+	@Test
+	public void testAnalyzerRecoversSwitchTargets() throws Exception {
+		// Create a function at CODE_START so the analyzer has context
+		int txId = program.startTransaction("test");
+		try {
+			AddressSet body = new AddressSet(addr(CODE_START), addr("0x8200102B"));
+			program.getFunctionManager().createFunction("switchFunc",
+				addr(CODE_START), body, SourceType.USER_DEFINED);
+		}
+		finally {
+			program.endTransaction(txId, true);
+		}
+
+		// Invoke the analyzer directly (following DecompilerSwitchAnalyzerTest pattern)
+		PowerPCAddressAnalyzer analyzer = new PowerPCAddressAnalyzer();
+		AddressSet analyzeSet = new AddressSet(addr(CODE_START), addr("0x8200102B"));
+		txId = program.startTransaction("analyze");
+		try {
+			analyzer.added(program, analyzeSet, TaskMonitor.DUMMY, null);
+		}
+		finally {
+			program.endTransaction(txId, true);
+		}
+
+		// Verify COMPUTED_JUMP references from bctr at 0x82001028
+		Reference[] refs = program.getReferenceManager()
+			.getReferencesFrom(addr("0x82001028"));
+		int computedJumps = 0;
+		for (Reference ref : refs) {
+			if (ref.getReferenceType() == RefType.COMPUTED_JUMP) {
+				computedJumps++;
+			}
+		}
+		assertTrue("Analyzer should recover at least 1 switch target, got " + computedJumps,
+			computedJumps > 0);
 	}
 }
