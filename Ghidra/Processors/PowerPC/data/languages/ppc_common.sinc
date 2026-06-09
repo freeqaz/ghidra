@@ -978,7 +978,15 @@ define token instr(32)
     vrS_8_15=(21,25)
 
 	WC=(21,22)
-	
+
+	# Gekko/Broadway paired-single (PSQ) bit fields
+	psq_W   = (15,15)
+	psq_I   = (12,14)
+	psq_D   = (0,11) signed
+	psq_WX  = (10,10)
+	psq_IX  = (7,9)
+	psq_XO6 = (1,6)
+
 	XOP_0_10=(0,10)
 	XOP_0_5=(0,5)
 	XOP_0_8=(0,8)

@@ -20,6 +20,23 @@
     <external_name tool="qemu_system" name="qemu-system-ppc"/>
   </language>
   <language processor="PowerPC"
+            endian="big"
+            size="32"
+            variant="Gekko_Broadway"
+            version="1.7"
+            slafile="ppc_32_gekko_be.sla"
+            processorspec="ppc_32.pspec"
+            manualindexfile="../manuals/PowerPC.idx"
+            id="PowerPC:BE:32:Gekko_Broadway">
+    <description>PowerPC Gekko/Broadway 32-bit big endian w/paired-single (Nintendo GameCube/Wii)</description>
+    <compiler name="default" spec="ppc_32.cspec" id="default"/>
+    <external_name tool="gnu" name="powerpc:750"/>
+    <external_name tool="IDA-PRO" name="ppc"/>
+    <external_name tool="DWARF.register.mapping.file" name="ppc.dwarf"/>
+    <external_name tool="qemu" name="qemu-ppc"/>
+    <external_name tool="qemu_system" name="qemu-system-ppc"/>
+  </language>
+  <language processor="PowerPC"
             endian="little"
             size="32"
             variant="default"

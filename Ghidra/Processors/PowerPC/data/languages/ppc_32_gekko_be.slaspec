@@ -1,0 +1,18 @@
+# SLA specification for the IBM/Nintendo Gekko (PowerPC 750CL) and Broadway
+# (PowerPC 750CL+) cores used by the Nintendo GameCube and Wii.
+#
+# Like ppc_32_be.slaspec but excludes AltiVec (which Gekko does not implement
+# and whose primary opcode 4 encodings collide with paired-single arithmetic)
+# and includes the Gekko paired-single extension instead.
+
+@define ENDIAN "big"
+
+@define REGISTER_SIZE "4"
+
+@define EATRUNC "ea"
+
+@define CTR_OFFSET "32"
+
+@include "ppc_common.sinc"
+@include "g2.sinc"
+@include "gekko.sinc"
