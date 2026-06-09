@@ -19,7 +19,6 @@ import static ghidra.feature.vt.api.correlator.program.VTAbstractReferenceProgra
 
 import java.util.*;
 import java.util.Map.Entry;
-import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.commons.collections4.map.LazyMap;
 
@@ -50,6 +49,13 @@ public abstract class VTAbstractReferenceProgramCorrelator extends VTAbstractPro
 	private static final int TOP_N = 5;
 	private static final double DIFFERENTIAL = 0.2;
 	private static final double EQUALS_EPSILON = 0.00001;
+
+	// Number of destinations scored per parallel batch. Peak memory is bounded to the neighbor
+	// maps of a single chunk (each neighbor map holds one VectorCompare per positive-similarity
+	// source), not to all destinations at once. A serial design streamed one destination at a
+	// time; chunking keeps that memory profile (one chunk live) while still feeding the parallel
+	// O(dest x src) compare enough work to amortize queue + thread-handoff overhead.
+	private static final int DEST_CHUNK_SIZE = 256;
 
 	private static final Comparator<VTMatchInfo> SCORE_COMPARATOR = (o1, o2) -> {
 		return o2.getSimilarityScore().compareTo(o1.getSimilarityScore());
@@ -141,17 +147,26 @@ public abstract class VTAbstractReferenceProgramCorrelator extends VTAbstractPro
 			v.doFinalize();
 		}
 
+		// Sort every destination address up front so the chunks are processed in ascending
+		// address order and the committed match order is globally deterministic, independent of
+		// HashMap iteration order or worker completion order.
+		List<Address> destAddrs = new ArrayList<>(destVectorsByAddress.keySet());
+		Collections.sort(destAddrs);
+
 		// PHASE P (parallel, pure vector math; no Program / matchSet access): for each destination
 		// function, compute its positive-similarity source neighbors. Workers read only the two
 		// finalized, read-only vector maps and per-pair-local VectorCompare objects, so no
-		// synchronization is required. Results are accumulated into a ConcurrentHashMap keyed by
-		// destination address (each destination is written by exactly one worker).
-		List<Entry<Address, LSHCosineVectorAccum>> destList =
-			new ArrayList<>(destVectorsByAddress.entrySet());
-		Map<Address, Map<Address, DominantPair<Double, VectorCompare>>> neighborsByDest =
-			new ConcurrentHashMap<>();
-
-		QCallback<Entry<Address, LSHCosineVectorAccum>, Object> callback =
+		// synchronization is required. Each result is keyed by destination address and written by
+		// exactly one worker.
+		//
+		// The original serial scorer streamed a single destination at a time, never retaining more
+		// than one destination's neighbor map. The first parallel version computed and retained
+		// EVERY destination's neighbor map before committing, which OOMed analyzeHeadless's default
+		// 2G heap at large N. To keep the parallel hot path while bounding peak memory, scoring runs
+		// in fixed-size chunks of sorted destinations: each chunk is scored in parallel, committed
+		// serially in sorted order, and then dropped before the next chunk is scored. Live memory is
+		// therefore bounded to a single chunk's neighbor maps regardless of total destination count.
+		QCallback<Entry<Address, LSHCosineVectorAccum>, Map<Address, DominantPair<Double, VectorCompare>>> callback =
 			(destEntry, taskMonitor) -> {
 				LSHCosineVectorAccum dstVector = destEntry.getValue();
 
@@ -172,27 +187,84 @@ public abstract class VTAbstractReferenceProgramCorrelator extends VTAbstractPro
 					}
 				}
 
-				neighborsByDest.put(destEntry.getKey(), srcNeighbors);
-				return null;
+				return srcNeighbors;
 			};
 
 		// Build a private thread pool by name (no AutoAnalysisManager in headless AutoVT). The
 		// monitor is shared for cancellation only; progress is incremented serially in Phase C so
-		// the parallel workers never touch monitor progress state.
-		ConcurrentQ<Entry<Address, LSHCosineVectorAccum>, Object> queue =
-			new ConcurrentQBuilder<Entry<Address, LSHCosineVectorAccum>, Object>()
+		// the parallel workers never touch monitor progress state. The queue collects each chunk's
+		// results, which we drain and clear (waitForResults() resets its internal result list) once
+		// per chunk, so the queue is reused across all chunks without per-chunk pool churn.
+		ConcurrentQ<Entry<Address, LSHCosineVectorAccum>, Map<Address, DominantPair<Double, VectorCompare>>> queue =
+			new ConcurrentQBuilder<Entry<Address, LSHCosineVectorAccum>, Map<Address, DominantPair<Double, VectorCompare>>>()
 					.setThreadPoolName("VT Reference Correlator")
 					.setMonitor(monitor)
 					.setCollectResults(true)
 					.build(callback);
 		try {
-			queue.add(destList);
-			Collection<QResult<Entry<Address, LSHCosineVectorAccum>, Object>> results =
-				queue.waitForResults();
-			// Surface any worker exception, mirroring DecompilerConcurrentQ's handling: unwrap a
-			// CancelledException and rethrow it, otherwise wrap as a RuntimeException.
-			for (QResult<Entry<Address, LSHCosineVectorAccum>, Object> result : results) {
-				result.getResult();
+			for (int chunkStart = 0; chunkStart < destAddrs.size();
+					chunkStart += DEST_CHUNK_SIZE) {
+
+				monitor.checkCancelled();
+
+				int chunkEnd = Math.min(chunkStart + DEST_CHUNK_SIZE, destAddrs.size());
+				List<Address> chunkAddrs = destAddrs.subList(chunkStart, chunkEnd);
+
+				// PHASE P (this chunk): score the chunk's destinations in parallel. Work items carry
+				// the destination address + its finalized vector; the worker returns that
+				// destination's neighbor map. Results map back to the destination via the QResult's
+				// item key, so no shared mutable map is needed.
+				List<Entry<Address, LSHCosineVectorAccum>> chunkWork =
+					new ArrayList<>(chunkAddrs.size());
+				for (Address destAddr : chunkAddrs) {
+					chunkWork.add(Map.entry(destAddr, destVectorsByAddress.get(destAddr)));
+				}
+
+				queue.add(chunkWork);
+
+				// waitForResults() returns this chunk's results and resets the queue's internal
+				// result list, so the queue is ready for the next chunk's add().
+				Collection<QResult<Entry<Address, LSHCosineVectorAccum>, Map<Address, DominantPair<Double, VectorCompare>>>> results =
+					queue.waitForResults();
+
+				Map<Address, Map<Address, DominantPair<Double, VectorCompare>>> neighborsByDest =
+					new HashMap<>(chunkAddrs.size() * 2);
+				// getResult() rethrows any worker exception, mirroring DecompilerConcurrentQ:
+				// a CancelledException is rethrown as-is, anything else is wrapped below.
+				for (QResult<Entry<Address, LSHCosineVectorAccum>, Map<Address, DominantPair<Double, VectorCompare>>> result : results) {
+					neighborsByDest.put(result.getItem().getKey(), result.getResult());
+				}
+
+				// PHASE C (this chunk, serial, deterministic): commit in sorted destination-address
+				// order. All Program and matchSet access happens here on a single thread, preserving
+				// the original behavior. matchSet.addMatch writes the session DB under a lock and
+				// must stay serial. chunkAddrs is already a slice of the globally sorted address
+				// list, so iterating it commits this chunk in ascending address order and the chunks
+				// themselves run in ascending order -> globally deterministic commit order.
+				for (Address destAddr : chunkAddrs) {
+
+					monitor.checkCancelled();
+					monitor.incrementProgress(1);
+
+					// Get the function containing the ACCEPTED match destination address
+					Function destFunc = destinationListing.getFunctionAt(destAddr);
+					LSHCosineVectorAccum dstVector = destVectorsByAddress.get(destAddr);
+					Map<Address, DominantPair<Double, VectorCompare>> srcNeighbors =
+						neighborsByDest.get(destAddr);
+
+					List<VTMatchInfo> members =
+						transform(matchSet, destFunc, dstVector, srcNeighbors, monitor);
+
+					for (VTMatchInfo member : members) {
+						if (member != null) {
+							matchSet.addMatch(member);
+						}
+					}
+				}
+
+				// Drop this chunk's neighbor maps (and the VectorCompare objects they hold) before
+				// scoring the next chunk, bounding live memory to one chunk.
+				neighborsByDest = null;
 			}
 		}
 		catch (InterruptedException e) {
@@ -207,35 +279,6 @@ public abstract class VTAbstractReferenceProgramCorrelator extends VTAbstractPro
 		finally {
 			queue.dispose();
 		}
-
-		// PHASE C (serial, deterministic): commit in sorted destination-address order. All Program
-		// and matchSet access happens here on a single thread, preserving the original behavior.
-		// matchSet.addMatch writes the session DB under a lock and must stay serial. Sorting by
-		// address makes the committed order deterministic (an improvement over HashMap iteration
-		// order).
-		List<Address> destAddrs = new ArrayList<>(neighborsByDest.keySet());
-		Collections.sort(destAddrs);
-		for (Address destAddr : destAddrs) {
-
-			monitor.checkCancelled();
-			monitor.incrementProgress(1);
-
-			// Get the function containing the ACCEPTED match destination address
-			Function destFunc = destinationListing.getFunctionAt(destAddr);
-			LSHCosineVectorAccum dstVector = destVectorsByAddress.get(destAddr);
-			Map<Address, DominantPair<Double, VectorCompare>> srcNeighbors =
-				neighborsByDest.get(destAddr);
-
-			List<VTMatchInfo> members =
-				transform(matchSet, destFunc, dstVector, srcNeighbors, monitor);
-
-			for (VTMatchInfo member : members) {
-				if (member != null) {
-					matchSet.addMatch(member);
-				}
-			}
-		}
-
 	}
 
 	/**
