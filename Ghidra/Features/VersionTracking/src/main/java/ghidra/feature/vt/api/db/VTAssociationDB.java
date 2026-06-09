@@ -176,7 +176,13 @@ public class VTAssociationDB extends DatabaseObject implements VTAssociation {
 
 	@Override
 	public int hashCode() {
-		return getSourceAddress().hashCode() + getDestinationAddress().hashCode();
+		// Identity is the association's DB record key, which the session keeps 1:1 with the
+		// (source,destination) pair (AssociationDatabaseManager.getOrCreateAssociationDB stores one
+		// record per pair). Hashing the cached primitive key needs no Address decode and no DB lock,
+		// unlike getSourceAddress()/getDestinationAddress(), which round-trip through the synchronized
+		// AddressMapDB. The previous offset-sum hash also collided badly across the many identical
+		// thunks a duplicate-function correlator produces, degrading HashSet ops to linear scans.
+		return Long.hashCode(getKey());
 	}
 
 	@Override
@@ -210,6 +216,16 @@ public class VTAssociationDB extends DatabaseObject implements VTAssociation {
 		if (obj == null) {
 			return false;
 		}
+		// Fast, lock-free, decode-free path: two associations in the same session are equal iff they
+		// are the same record. Equivalent to comparing (source,destination) because the session stores
+		// exactly one association per source/destination pair.
+		if (obj instanceof VTAssociationDB) {
+			VTAssociationDB other = (VTAssociationDB) obj;
+			if (associationDBM == other.associationDBM) {
+				return getKey() == other.getKey();
+			}
+		}
+		// Fallback for cross-session or non-DB VTAssociation impls: original address comparison.
 		if (!(obj instanceof VTAssociation)) {
 			return false;
 		}
