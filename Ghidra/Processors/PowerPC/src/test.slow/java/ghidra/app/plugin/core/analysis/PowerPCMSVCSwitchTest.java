@@ -19,6 +19,7 @@ import static org.junit.Assert.*;
 
 import org.junit.*;
 
+import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.program.database.ProgramBuilder;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
@@ -150,14 +151,35 @@ public class PowerPCMSVCSwitchTest extends AbstractGhidraHeadlessIntegrationTest
 		// entry 2: 0x0300 -> 0x82001000 + 0x0300 = 0x82001300
 		builder.setBytes(TABLE_ADDR, "01 00 02 00 03 00");
 
-		// Disassemble code regions
-		builder.disassemble(CODE_START, 44); // 11 instructions * 4 bytes
-		builder.disassemble("0x82001030", 4);
-		builder.disassemble(TARGET_0, 4);
-		builder.disassemble(TARGET_1, 4);
-		builder.disassemble(TARGET_2, 4);
+		// Disassemble code regions WITHOUT auto-analysis. ProgramBuilder.disassemble()
+		// runs the full analysis pipeline (which now includes working switch-table
+		// recovery), so using it here would recover the switch during setup and defeat
+		// testAnalyzerRecoversSwitchTargets (which must drive the analyzer explicitly)
+		// and testProgramSetup (which checks the pre-analysis state).
+		disassembleNoAnalysis(prog, CODE_START, 44); // 11 instructions * 4 bytes
+		disassembleNoAnalysis(prog, "0x82001030", 4);
+		disassembleNoAnalysis(prog, TARGET_0, 4);
+		disassembleNoAnalysis(prog, TARGET_1, 4);
+		disassembleNoAnalysis(prog, TARGET_2, 4);
 
-		return builder.getProgram();
+		return prog;
+	}
+
+	/**
+	 * Disassemble a code region without triggering auto-analysis, so the program is
+	 * left in a disassembled-but-not-analyzed state.
+	 */
+	private void disassembleNoAnalysis(Program prog, String addressString, int length) {
+		Address start = prog.getAddressFactory().getAddress(addressString);
+		AddressSet set = new AddressSet(start, start.add(length - 1));
+		int txId = prog.startTransaction("disassemble");
+		try {
+			DisassembleCommand cmd = new DisassembleCommand(start, set, true);
+			cmd.applyTo(prog, TaskMonitor.DUMMY);
+		}
+		finally {
+			prog.endTransaction(txId, true);
+		}
 	}
 
 	/**

@@ -444,6 +444,17 @@ public class PowerPCAddressAnalyzer extends ConstantPropagationAnalyzer {
 										tableIndexOffset = -lval;
 									}
 								}
+								// Inject the assumed switch index directly into the guard
+								// register. The lazy unknownValue() fallback only fires the
+								// first time the register is read, which for guard shapes where
+								// that first read is the compare itself (before hitTheGuard is
+								// set) returns null, so the assumed index never reaches the
+								// table-index computation and no targets are recovered. Setting
+								// it here guarantees the index propagates through to the
+								// indirect branch. The value is the same one unknownValue()
+								// supplies, so cases where the lazy path already works are
+								// unaffected.
+								context.setValue(reg, BigInteger.valueOf(assumeValue));
 							}
 						}
 					}
