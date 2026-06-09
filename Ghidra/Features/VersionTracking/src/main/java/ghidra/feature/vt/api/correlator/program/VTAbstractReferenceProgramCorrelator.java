@@ -19,10 +19,15 @@ import static ghidra.feature.vt.api.correlator.program.VTAbstractReferenceProgra
 
 import java.util.*;
 import java.util.Map.Entry;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.commons.collections4.map.LazyMap;
 
 import generic.DominantPair;
+import generic.concurrent.ConcurrentQ;
+import generic.concurrent.ConcurrentQBuilder;
+import generic.concurrent.QCallback;
+import generic.concurrent.QResult;
 import generic.lsh.vector.LSHCosineVectorAccum;
 import generic.lsh.vector.VectorCompare;
 import ghidra.feature.vt.api.main.*;
@@ -122,33 +127,104 @@ public abstract class VTAbstractReferenceProgramCorrelator extends VTAbstractPro
 			throws CancelledException {
 
 		monitor.initialize(destVectorsByAddress.size());
-		Set<Entry<Address, LSHCosineVectorAccum>> destEntries = destVectorsByAddress.entrySet();
-		for (Entry<Address, LSHCosineVectorAccum> destEntry : destEntries) {
+
+		// Pre-finalize all vectors single-threaded so the parallel compare phase is race-free.
+		// LSHCosineVectorAccum.compare() lazily calls doFinalize() on BOTH operands, which mutates
+		// the vector exactly once (rebuilds hash[], nulls treehash, sets finalized) and is then
+		// idempotent. After finalization, compare() is a pure read of hash[] with only local
+		// scratch state. Finalizing every source and destination vector here, before fan-out,
+		// means the parallel compares mutate nothing and need no synchronization.
+		for (LSHCosineVectorAccum v : srcVectorsByAddress.values()) {
+			v.doFinalize();
+		}
+		for (LSHCosineVectorAccum v : destVectorsByAddress.values()) {
+			v.doFinalize();
+		}
+
+		// PHASE P (parallel, pure vector math; no Program / matchSet access): for each destination
+		// function, compute its positive-similarity source neighbors. Workers read only the two
+		// finalized, read-only vector maps and per-pair-local VectorCompare objects, so no
+		// synchronization is required. Results are accumulated into a ConcurrentHashMap keyed by
+		// destination address (each destination is written by exactly one worker).
+		List<Entry<Address, LSHCosineVectorAccum>> destList =
+			new ArrayList<>(destVectorsByAddress.entrySet());
+		Map<Address, Map<Address, DominantPair<Double, VectorCompare>>> neighborsByDest =
+			new ConcurrentHashMap<>();
+
+		QCallback<Entry<Address, LSHCosineVectorAccum>, Object> callback =
+			(destEntry, taskMonitor) -> {
+				LSHCosineVectorAccum dstVector = destEntry.getValue();
+
+				// Get the set of possible matches, neighbors, in the SourceProgram
+				Map<Address, DominantPair<Double, VectorCompare>> srcNeighbors = new HashMap<>();
+				for (Entry<Address, LSHCosineVectorAccum> srcEntry : srcVectorsByAddress
+						.entrySet()) {
+					Address srcAddr = srcEntry.getKey();
+					LSHCosineVectorAccum srcVector = srcEntry.getValue();
+
+					VectorCompare vectorCompare = new VectorCompare();
+					// Single compare per pair: the prior code compared twice (once for the score,
+					// once again to gate on > 0). The stored VectorCompare is identical either way.
+					double similarity = dstVector.compare(srcVector, vectorCompare);
+					if (similarity > 0) {
+						srcNeighbors.put(srcAddr,
+							new DominantPair<>(similarity, vectorCompare));
+					}
+				}
+
+				neighborsByDest.put(destEntry.getKey(), srcNeighbors);
+				return null;
+			};
+
+		// Build a private thread pool by name (no AutoAnalysisManager in headless AutoVT). The
+		// monitor is shared for cancellation only; progress is incremented serially in Phase C so
+		// the parallel workers never touch monitor progress state.
+		ConcurrentQ<Entry<Address, LSHCosineVectorAccum>, Object> queue =
+			new ConcurrentQBuilder<Entry<Address, LSHCosineVectorAccum>, Object>()
+					.setThreadPoolName("VT Reference Correlator")
+					.setMonitor(monitor)
+					.setCollectResults(true)
+					.build(callback);
+		try {
+			queue.add(destList);
+			Collection<QResult<Entry<Address, LSHCosineVectorAccum>, Object>> results =
+				queue.waitForResults();
+			// Surface any worker exception, mirroring DecompilerConcurrentQ's handling: unwrap a
+			// CancelledException and rethrow it, otherwise wrap as a RuntimeException.
+			for (QResult<Entry<Address, LSHCosineVectorAccum>, Object> result : results) {
+				result.getResult();
+			}
+		}
+		catch (InterruptedException e) {
+			throw new CancelledException();
+		}
+		catch (CancelledException e) {
+			throw e;
+		}
+		catch (Exception e) {
+			throw new RuntimeException("Unexpected exception scoring reference vectors", e);
+		}
+		finally {
+			queue.dispose();
+		}
+
+		// PHASE C (serial, deterministic): commit in sorted destination-address order. All Program
+		// and matchSet access happens here on a single thread, preserving the original behavior.
+		// matchSet.addMatch writes the session DB under a lock and must stay serial. Sorting by
+		// address makes the committed order deterministic (an improvement over HashMap iteration
+		// order).
+		List<Address> destAddrs = new ArrayList<>(neighborsByDest.keySet());
+		Collections.sort(destAddrs);
+		for (Address destAddr : destAddrs) {
 
 			monitor.checkCancelled();
 			monitor.incrementProgress(1);
 
 			// Get the function containing the ACCEPTED match destination address
-			Function destFunc = destinationListing.getFunctionAt(destEntry.getKey());
-			LSHCosineVectorAccum dstVector = destEntry.getValue();
-
-			// Get the set of possible matches, neighbors, in the SourceProgram
-			Map<Address, DominantPair<Double, VectorCompare>> srcNeighbors = new HashMap<>();
-
-			Set<Entry<Address, LSHCosineVectorAccum>> srcEntries = srcVectorsByAddress.entrySet();
-			for (Entry<Address, LSHCosineVectorAccum> srcEntry : srcEntries) {
-				Address srcAddr = srcEntry.getKey();
-				LSHCosineVectorAccum srcVector = srcEntry.getValue();
-
-				VectorCompare vectorCompare = new VectorCompare();
-				double similarity = dstVector.compare(srcVector, vectorCompare);
-				DominantPair<Double, VectorCompare> compareOut =
-					new DominantPair<>(similarity, vectorCompare);
-
-				if (dstVector.compare(srcVector, vectorCompare) > 0) {
-					srcNeighbors.put(srcAddr, compareOut);
-				}
-			}
+			Function destFunc = destinationListing.getFunctionAt(destAddr);
+			LSHCosineVectorAccum dstVector = destVectorsByAddress.get(destAddr);
+			Map<Address, DominantPair<Double, VectorCompare>> srcNeighbors =
+				neighborsByDest.get(destAddr);
 
 			List<VTMatchInfo> members =
 				transform(matchSet, destFunc, dstVector, srcNeighbors, monitor);
