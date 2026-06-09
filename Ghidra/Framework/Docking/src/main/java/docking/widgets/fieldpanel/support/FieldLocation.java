@@ -21,6 +21,7 @@ import org.jdom2.Element;
 
 import docking.widgets.fieldpanel.Layout;
 import docking.widgets.fieldpanel.field.Field;
+import generic.json.Json;
 
 /**
  * Class to represent {@link Field} locations within the field viewer.
@@ -92,6 +93,13 @@ public class FieldLocation implements Comparable<FieldLocation> {
 		this(BigInteger.valueOf(index), fieldNum, row, col);
 	}
 
+	/**
+	* Construct a new FieldLocation with the given index,fieldNum,row, and col.
+	* @param index the index of the layout containing the location
+	* @param fieldNum the index of the field in the layout containing the location
+	* @param row the text row in the field containing the location.
+	* @param col the character position in the row containing the location.
+	*/
 	public FieldLocation(BigInteger index, int fieldNum, int row, int col) {
 		this.index = index;
 		this.fieldNum = fieldNum;
@@ -207,7 +215,7 @@ public class FieldLocation implements Comparable<FieldLocation> {
 
 	@Override
 	public String toString() {
-		return index.toString() + ", " + fieldNum + ", " + row + ", " + col;
+		return Json.toString(this, "index", "fieldNum", "row", "col");
 
 	}
 

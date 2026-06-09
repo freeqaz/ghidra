@@ -28,7 +28,7 @@ import ghidra.app.util.DataTypeNamingUtil;
 import ghidra.app.util.bin.format.dwarf.attribs.DWARFNumericAttribute;
 import ghidra.app.util.bin.format.dwarf.expression.DWARFExpressionException;
 import ghidra.app.util.bin.format.golang.rtti.types.GoKind;
-import ghidra.program.database.DatabaseObject;
+import ghidra.program.database.DbObject;
 import ghidra.program.database.data.DataTypeUtilities;
 import ghidra.program.model.data.*;
 import ghidra.program.model.data.Enum;
@@ -247,7 +247,7 @@ public class DWARFDataTypeImporter {
 	 * 						offset -> ddt
 	 */
 	private void recordTempDataType(DWARFDataType ddt) {
-		if (ddt.dataType instanceof DatabaseObject) {
+		if (ddt.dataType instanceof DbObject) {
 			// don't store info about types that are already in the database
 			return;
 		}
@@ -467,7 +467,7 @@ public class DWARFDataTypeImporter {
 		// NOTE: gcc tends to emit values without an explicit signedness.  The caller
 		// can specify a default signedness, but this should probably always be unsigned.
 		for (DebugInfoEntry childEntry : diea.getChildren(DW_TAG_enumerator)) {
-			DIEAggregate childDIEA = prog.getAggregate(childEntry);
+			DIEAggregate childDIEA = prog.getDIEContainer().getAggregate(childEntry);
 			String valueName = childDIEA.getName();
 
 			DWARFNumericAttribute enumValAttr = childDIEA
@@ -642,7 +642,7 @@ public class DWARFDataTypeImporter {
 
 		UnionDataType union = (UnionDataType) ddt.dataType;
 		for (DebugInfoEntry childEntry : diea.getChildren(DW_TAG_member)) {
-			DIEAggregate childDIEA = prog.getAggregate(childEntry);
+			DIEAggregate childDIEA = prog.getDIEContainer().getAggregate(childEntry);
 
 			// skip static member vars as they do not have storage in the structure
 			// C does not allow static member vars in unions
@@ -836,7 +836,7 @@ public class DWARFDataTypeImporter {
 
 		for (DebugInfoEntry childEntry : diea.getChildren(childTagType)) {
 
-			DIEAggregate childDIEA = prog.getAggregate(childEntry);
+			DIEAggregate childDIEA = prog.getDIEContainer().getAggregate(childEntry);
 			// skip static member vars as they do not have storage in the structure
 			if (childDIEA.hasAttribute(DW_AT_external)) {
 				continue;
@@ -1099,7 +1099,8 @@ public class DWARFDataTypeImporter {
 		List<Integer> dimensions = new ArrayList<>();
 		List<DebugInfoEntry> subrangeDIEs = diea.getChildren(DW_TAG_subrange_type);
 		for (int subRangeDIEIndex = 0; subRangeDIEIndex < subrangeDIEs.size(); subRangeDIEIndex++) {
-			DIEAggregate subrangeAggr = prog.getAggregate(subrangeDIEs.get(subRangeDIEIndex));
+			DIEAggregate subrangeAggr =
+				prog.getDIEContainer().getAggregate(subrangeDIEs.get(subRangeDIEIndex));
 			long numElements = -1;
 			try {
 				if (subrangeAggr.hasAttribute(DW_AT_count)) {
@@ -1235,12 +1236,13 @@ public class DWARFDataTypeImporter {
 	 * pointing to the destination and omit creating a Ghidra typedef.
 	 * <p>
 	 * If the typedef points (via a pointer) to a function definition type that doesn't
-	 * have a name yet, update the function defintion with the name from this typedef
+	 * have a name yet, update the function definition with the name from this typedef
 	 * and elide this typedef.
 	 * <p>
 	 * If the typedef points to a base type (eg int, float, etc), let the base type factory
 	 * create the typedef as it can do it better if there are size specifiers in the typedef name
-	 * (eg. int64_t).
+	 * (eg. int64_t).  Standard typedefs may be replaced by a Ghidra BuiltIn or alternative
+	 * typedef that leverage a BuiltIn for well-known cases.
 	 * 
 	 */
 	private DWARFDataType makeDataTypeForTypedef(DIEAggregate diea)
@@ -1293,9 +1295,14 @@ public class DWARFDataTypeImporter {
 
 		TypedefDataType typedefDT = new TypedefDataType(typedefDNI.getParentCP(),
 			typedefDNI.getName(), refdDT.dataType, dataTypeManager);
-		updateMapping(refdDT.dataType, typedefDT.getDataType());
+		DataType resultDT = DataTypeUtilities.getTypedefReplacement(typedefDT, true);
 
-		return new DWARFDataType(typedefDT, typedefDNI, diea.getOffset());
+// TODO: Original code appeared to update mapping with no real impact
+// TODO: Re-examine what should be done for updateMapping if anything.
+//		updateMapping(refdDT.dataType, 
+//			resultDT instanceof TypeDef tdResult ? tdResult.getDataType() : resultDT);
+
+		return new DWARFDataType(resultDT, typedefDNI, diea.getOffset());
 	}
 
 	/*

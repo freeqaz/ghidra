@@ -91,12 +91,13 @@ public class FrontEndTool extends PluginTool implements OptionsChangeListener {
 	public static final String DEFAULT_TOOL_LAUNCH_MODE = "Default Tool Launch Mode";
 	public static final String AUTOMATICALLY_SAVE_TOOLS = "Automatically Save Tools";
 	private static final String USE_ALERT_ANIMATION_OPTION_NAME = "Use Notification Animation";
+	private static final String USE_COMBINED_ALT_GRAPH_OPTION_NAME = "Use Combined Alt Keys";
 	private static final String SHOW_TOOLTIPS_OPTION_NAME = "Show Tooltips";
 	private static final String BLINKING_CURSORS_OPTION_NAME = "Allow Blinking Cursors";
 
-	// TODO: Experimental Option !!
 	private static final String ENABLE_COMPRESSED_DATABUFFER_OUTPUT =
 		"Use DataBuffer Output Compression";
+	private static final Boolean ENABLE_COMPRESSED_DATABUFFER_OUTPUT_DEFAULT = true;
 
 	private static final String RESTORE_PREVIOUS_PROJECT_NAME = "Restore Previous Project";
 	private boolean shouldRestorePreviousProject;
@@ -181,7 +182,7 @@ public class FrontEndTool extends PluginTool implements OptionsChangeListener {
 
 	@Override
 	public boolean accept(URL url) {
-		if (!GhidraURL.isLocalProjectURL(url) && !GhidraURL.isServerRepositoryURL(url)) {
+		if (!GhidraURL.isLocalURL(url) && !GhidraURL.isServerRepositoryURL(url)) {
 			return false;
 		}
 		Swing.runLater(() -> execute(new AcceptUrlContentTask(url, true, plugin)));
@@ -216,7 +217,7 @@ public class FrontEndTool extends PluginTool implements OptionsChangeListener {
 			return;
 		}
 
-		GhidraToolTemplate template = new GhidraToolTemplate((Element) root.getChildren().get(0),
+		GhidraToolTemplate template = new GhidraToolTemplate(root.getChildren().get(0),
 			TOOL_FILE.getAbsolutePath());
 		refresh(template);
 	}
@@ -349,9 +350,14 @@ public class FrontEndTool extends PluginTool implements OptionsChangeListener {
 		options.registerOption(USE_ALERT_ANIMATION_OPTION_NAME, true, help,
 			"Signals that user notifications should be animated.  This makes notifications more " +
 				"distinguishable.");
+		options.registerOption(USE_COMBINED_ALT_GRAPH_OPTION_NAME, true, help,
+			"Signals to have both right and left Alt keys be usable for key bindings that use the " +
+				"Alt key.");
+
 		options.registerOption(SHOW_TOOLTIPS_OPTION_NAME, true, help,
 			"Controls the display of tooltip popup windows.");
-		options.registerOption(ENABLE_COMPRESSED_DATABUFFER_OUTPUT, false, help,
+		options.registerOption(ENABLE_COMPRESSED_DATABUFFER_OUTPUT,
+			ENABLE_COMPRESSED_DATABUFFER_OUTPUT_DEFAULT, help,
 			"When enabled data buffers sent to Ghidra Server are compressed (see server " +
 				"configuration for other direction)");
 
@@ -369,11 +375,15 @@ public class FrontEndTool extends PluginTool implements OptionsChangeListener {
 		boolean animationEnabled = options.getBoolean(USE_ALERT_ANIMATION_OPTION_NAME, true);
 		AnimationUtils.setAnimationEnabled(animationEnabled);
 
+		boolean combineAltKeys = options.getBoolean(USE_COMBINED_ALT_GRAPH_OPTION_NAME, true);
+		DockingUtils.setCombinedAltKeysEnabled(combineAltKeys);
+
 		boolean showToolTips = options.getBoolean(SHOW_TOOLTIPS_OPTION_NAME, true);
 		DockingUtils.setGlobalTooltipEnabledOption(showToolTips);
 
 		boolean compressDataBuffers =
-			options.getBoolean(ENABLE_COMPRESSED_DATABUFFER_OUTPUT, false);
+			options.getBoolean(ENABLE_COMPRESSED_DATABUFFER_OUTPUT,
+				ENABLE_COMPRESSED_DATABUFFER_OUTPUT_DEFAULT);
 		DataBuffer.enableCompressedSerializationOutput(compressDataBuffers);
 
 		shouldRestorePreviousProject = options.getBoolean(RESTORE_PREVIOUS_PROJECT_NAME, true);
@@ -395,6 +405,9 @@ public class FrontEndTool extends PluginTool implements OptionsChangeListener {
 		}
 		else if (USE_ALERT_ANIMATION_OPTION_NAME.equals(optionName)) {
 			AnimationUtils.setAnimationEnabled((Boolean) newValue);
+		}
+		else if (USE_COMBINED_ALT_GRAPH_OPTION_NAME.equals(optionName)) {
+			DockingUtils.setCombinedAltKeysEnabled((Boolean) newValue);
 		}
 		else if (SHOW_TOOLTIPS_OPTION_NAME.equals(optionName)) {
 			DockingUtils.setGlobalTooltipEnabledOption((Boolean) newValue);

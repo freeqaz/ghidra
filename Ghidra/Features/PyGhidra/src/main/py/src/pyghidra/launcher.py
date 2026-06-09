@@ -225,7 +225,7 @@ class PyGhidraLauncher:
     def _setup_dev_classpath(self, utility_dir: Path):
         """
         Sets up the classpath for dev mode as seen in
-        Ghidra/RuntimeScripts/Linux/support/launch.sh
+        Ghidra/RuntimeScripts/support/launch.sh
         """
         bin_dir = Path("bin") / "main"
         build_dir = Path("build") / "libs"
@@ -274,7 +274,7 @@ class PyGhidraLauncher:
         root = self._install_dir
 
         if self._dev_mode:
-            root = root / "Ghidra" / "RuntimeScripts" / "Common"
+            root = root / "Ghidra" / "RuntimeScripts"
 
         launch_properties = root / "support" / "launch.properties"
 
@@ -314,7 +314,18 @@ class PyGhidraLauncher:
                 launch_support = self.install_dir / "support" / "LaunchSupport.jar"
             if not launch_support.exists():
                 raise ValueError(f"{launch_support} does not exist")
-            cmd = f'java -cp "{launch_support}" LaunchSupport "{self.install_dir}" -jdk_home -save'
+
+            # Check to see if java is on the PATH. If not, use JAVA_HOME.
+            # NOTE: shutils.which() is not enough...macOS puts a stub java on the PATH which
+            # will prevent that from working as expected, so you have to actually run it.
+            java_cmd = 'java'
+            if not shutil.which(java_cmd) or subprocess.run([java_cmd, "-version"], stderr=subprocess.DEVNULL).returncode != 0:
+                java_home_dir = os.environ.get('JAVA_HOME')
+                if java_home_dir and os.path.isdir(java_home_dir):
+                    java_cmd = java_home_dir + "/bin/java"
+                else:
+                    raise ValueError("Java was not found in PATH or JAVA_HOME...cannot run LaunchSupport")
+            cmd = f'"{java_cmd}" -cp "{launch_support}" LaunchSupport "{self.install_dir}" -jdk_home -save'
             home = subprocess.check_output(cmd, encoding="utf-8", shell=True)
             self._java_home = Path(home.rstrip())
         return self._java_home

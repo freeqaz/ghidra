@@ -175,8 +175,7 @@ public class ClangLayoutController implements LayoutModel, LayoutModelListener {
 		FieldElement[] elements = createFieldElementsForLine(tokens);
 
 		int indent = line.getIndent() * indentWidth;
-		int updatedMaxWidth = maxWidth;
-		return new ClangTextField(tokens, elements, indent, line.getLineNumber(), updatedMaxWidth,
+		return new ClangTextField(tokens, elements, indent, line.getLineNumber(), maxWidth,
 			hlFactory);
 	}
 
@@ -184,20 +183,21 @@ public class ClangLayoutController implements LayoutModel, LayoutModelListener {
 
 		FieldElement[] elements = new FieldElement[tokens.size()];
 		int columnPosition = 0;
+		Program program = decompilerPanel.getProgram();
+		ClangHighlightController hlController = decompilerPanel.getHighlightController();
 		for (int i = 0; i < tokens.size(); ++i) {
 			ClangToken token = tokens.get(i);
 			Color color = getTokenColor(token);
 
 			if (token instanceof ClangCommentToken) {
 				AttributedString prototype = new AttributedString("prototype", color, metrics);
-				Program program = decompilerPanel.getProgram();
 				elements[i] =
 					CommentUtils.parseTextForAnnotations(token.getText(), program, prototype, 0);
 				columnPosition += elements[i].length();
 			}
 			else {
 				AttributedString as = new AttributedString(token.getText(), color, metrics);
-				elements[i] = new ClangFieldElement(token, as, columnPosition);
+				elements[i] = new ClangFieldElement(hlController, token, as, columnPosition);
 				columnPosition += as.length();
 			}
 		}

@@ -51,6 +51,8 @@ HighVariable *Funcdata::assignHigh(Varnode *vn)
   if ((flags & highlevel_on)!=0) {
     if (vn->hasCover())
       vn->calcCover();
+    if (vn->getType()->hasWarning())
+      issueDatatypeWarning(vn->getType());
     if (!vn->isAnnotation()) {
       return new HighVariable(vn);
     }
@@ -536,6 +538,22 @@ void Funcdata::adjustInputVarnodes(const Address &addr,int4 sz)
   }
 }
 
+/// If the Varnode has descendants or is address forced, this method does nothing.
+/// Otherwise, the Varnode is destroyed as is its defining PcodeOp.  Any dead inputs to the PcodeOp are
+/// then destroyed recursively.
+/// \param vn is the Varnode to destroy
+void Funcdata::destroyVarnodeRecursive(Varnode *vn)
+
+{
+  if (vn->isAutoLive() || !vn->hasNoDescend()) return;
+  if (!vn->isWritten()) {
+    vbank.destroy(vn);
+    return;
+  }
+  vector<PcodeOp *> scratch;
+  opDestroyRecursive(vn->getDef(), scratch);
+}
+
 /// All p-code ops that read the Varnode are transformed so that they read
 /// a special constant instead (associate with unreachable block removal).
 /// \param vn is the given Varnode
@@ -888,6 +906,9 @@ void Funcdata::calcNZMask(void)
       if (!vn->isWritten()) {
 	if (vn->isConstant())
 	  vn->nzm = vn->getOffset();
+	else if (vn->isTypeLock() && vn->getType()->getMetatype() == TYPE_BOOL) {
+	  vn->nzm = 1;
+	}
 	else {
 	  vn->nzm = calc_mask(vn->getSize());
 	  if (vn->isSpacebase())
@@ -1637,15 +1658,40 @@ void Funcdata::coverVarnodes(SymbolEntry *entry,vector<Varnode *> &list)
 bool Funcdata::applyUnionFacet(SymbolEntry *entry,DynamicHash &dhash)
 
 {
-  Symbol *sym = entry->getSymbol();
+  UnionFacetSymbol *sym = (UnionFacetSymbol *)entry->getSymbol();
+  if (sym->isAddrBased()) {
+    ResolvedUnion resolve(sym->getType(), sym->getFieldNumber(), *glb->types);
+    resolve.setLock(true);
+    int4 slot = DynamicHash::getSlotFromHash(entry->getHash());
+    return setAddressBasedUnionField(sym->getType(), entry->getFirstUseAddress(), slot, resolve);
+  }
   PcodeOp *op = dhash.findOp(this, entry->getFirstUseAddress(), entry->getHash());
   if (op == (PcodeOp *)0)
     return false;
   int4 slot = DynamicHash::getSlotFromHash(entry->getHash());
-  int4 fldNum = ((UnionFacetSymbol *)sym)->getFieldNumber();
-  ResolvedUnion resolve(sym->getType(), fldNum, *glb->types);
+  const ResolvedUnion *res = getUnionResolution(sym->getType(), op, slot);
+  if (res != (const ResolvedUnion *)0 && res->getFieldNum() == sym->getFieldNumber())
+    return false;
+  Varnode *vn = (slot < 0) ? op->getOut() : op->getIn(slot);
+  Datatype *unresType = sym->getType();
+  Datatype *dt = vn->getType();
+  if (dt->getMetatype() == TYPE_PTR) {
+    if (((TypePointer *)dt)->getPtrTo() == unresType) {
+      unresType = dt;
+    }
+  }
+  else if (dt->getMetatype() == TYPE_PARTIALSTRUCT) {
+    if (((TypePartialStruct *)dt)->getParent() == unresType)
+      unresType = dt;
+  }
+  else if (dt->getMetatype() == TYPE_PARTIALUNION) {
+    if (((TypePartialUnion *)dt)->getParentUnion() == unresType)
+      unresType = dt;
+  }
+  ResolvedUnion resolve(unresType,sym->getFieldNumber(), *glb->types);
   resolve.setLock(true);
-  return setUnionField(sym->getType(),op,slot,resolve);
+  setUnionField(unresType,op,slot,resolve);
+  return true;
 }
 
 /// Search for \e addrtied Varnodes whose storage falls in the global Scope, then

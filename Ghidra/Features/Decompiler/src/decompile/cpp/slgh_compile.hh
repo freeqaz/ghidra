@@ -60,14 +60,15 @@ class SectionVector {
   RtlPair main;			///< The main section
   vector<RtlPair> named;	///< Named sections accessed by index
 public:
-  SectionVector(ConstructTpl *rtl,SymbolScope *scope);					///< Constructor
-  ConstructTpl *getMainSection(void) const { return main.section; }			///< Get the \e main section
-  ConstructTpl *getNamedSection(int4 index) const { return named[index].section; }	///< Get a \e named section by index
-  RtlPair getMainPair(void) const { return main; }					///< Get the \e main section/namespace pair
-  RtlPair getNamedPair(int4 i) const { return named[i]; }		///< Get a \e named section/namespace pair by index
-  void setNextIndex(int4 i) { nextindex = i; }				///< Set the index of the currently parsing \e named section
-  int4 getMaxId(void) const { return named.size(); }			///< Get the maximum (exclusive) named section index
-  void append(ConstructTpl *rtl,SymbolScope *scope);			///< Add a new \e named section
+  SectionVector(ConstructTpl *rtl,SymbolScope *scope);		///< Constructor
+  ~SectionVector(void);						///< Destructor
+  ConstructTpl *releaseMainSection(void);			///< Get the \e main section, giving up ownership
+  ConstructTpl *releaseNamedSection(int4 index);		///< Get a \e named section by index, giving up ownership
+  RtlPair getMainPair(void) const { return main; }		///< Get the \e main section/namespace pair
+  RtlPair getNamedPair(int4 i) const { return named[i]; }	///< Get a \e named section/namespace pair by index
+  void setNextIndex(int4 i) { nextindex = i; }			///< Set the index of the currently parsing \e named section
+  int4 getMaxId(void) const { return named.size(); }		///< Get the maximum (exclusive) named section index
+  void append(ConstructTpl *rtl,SymbolScope *scope);		///< Add a new \e named section
 };
 
 /// \brief Qualities associated (via parsing) with an address space
@@ -158,30 +159,32 @@ public:
     mutable int4 opttype; ///< 0 = register read by a COPY, 1 = register written by a COPY (-1 otherwise)
 
     /// \brief Construct a record, initializing counts
+    ///
+    /// \param offset is the starting offset of the temporary range
+    /// \param size is the number of bytes in the range
     OptimizeRecord(uintb offset, int4 size) {
       this->offset = offset;
       this->size = size;
       writeop = -1; readop = -1; inslot=-1; writecount=0; readcount=0; writesection=-2; readsection=-2; opttype=-1;
     }
-    void copyFromExcludingSize(OptimizeRecord &that);
-    void update(int4 opIdx, int4 slotIdx, int4 secNum);
-    void updateRead(int4 i, int4 inslot, int4 secNum);
-    void updateWrite(int4 i, int4 secNum);
-    void updateExport();
-    void updateCombine(OptimizeRecord &that);
+    OptimizeRecord(vector<OptimizeRecord *> &records);	///< Constructor merging the given overlapping records into a single record
+    void updateRead(int4 i, int4 inslot, int4 secNum);	///< Mark \b this range as being read by a specific op
+    void updateWrite(int4 i, int4 secNum);		///< Mark \b this range as being written by a specific op
+    void updateExport(void);				///< Mark \b this range as exported from the constructor
+    void updateCombine(OptimizeRecord &that);		///< Merge another record's read and write references into \b this
   };
 private:
+  /// \brief Container of OptimizeRecords for possibly overlapping temporary registers
   class UniqueState {
-    map<uintb,OptimizeRecord> recs;
-    static uintb endOf(map<uintb,OptimizeRecord>::iterator &iter) { return iter->first + iter->second.size; }
-    OptimizeRecord coalesce(vector<OptimizeRecord*> &records);
-    map<uintb,OptimizeRecord>::iterator lesserIter(uintb offset);
+    map<uintb,OptimizeRecord> recs;	///< Map from unique space offset to OptimizeRecord
+    static uintb endOf(map<uintb,OptimizeRecord>::iterator &iter) { return iter->first + iter->second.size; }	///< Get ending offset record
+    map<uintb,OptimizeRecord>::iterator lesserIter(uintb offset);	///< Get last record less than the given offset
   public:
-    void clear(void) { recs.clear(); }
-    void set(uintb offset, int4 size, OptimizeRecord &rec);
-    void getDefinitions(vector<OptimizeRecord*> &result, uintb offset, int4 size);
-    map<uintb,OptimizeRecord>::const_iterator begin(void) const { return recs.begin(); }
-    map<uintb,OptimizeRecord>::const_iterator end(void) const { return recs.end(); }
+    void clear(void) { recs.clear(); }					///< Clear all records
+    void set(OptimizeRecord &rec);					///< Add a new record to the collection
+    void getDefinitions(vector<OptimizeRecord*> &result, uintb offset, int4 size);	///< Get any definitions overlapping the given range
+    map<uintb,OptimizeRecord>::const_iterator begin(void) const { return recs.begin(); }	///< Get starting iterator to all records
+    map<uintb,OptimizeRecord>::const_iterator end(void) const { return recs.end(); }		///< Get ending iterator to all records
   };
 
   SleighCompile *compiler;	///< Parsed form of the SLEIGH file being examined
@@ -479,8 +482,6 @@ public:
 		     bool caseSensitiveRegisterNames,bool debugOutput);
   int4 run_compilation(const string &filein,const string &fileout);
 };
-
-ostream& operator<<(ostream &os, const ConsistencyChecker::OptimizeRecord &rec);
 
 extern SleighCompile *slgh;		///< A global reference to the SLEIGH compiler accessible to the parse functions
 extern int yydebug;			///< Debug state for the SLEIGH parse functions

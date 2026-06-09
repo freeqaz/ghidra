@@ -38,7 +38,7 @@ def get_application_properties(install_dir: Path) -> Dict[str, str]:
 
 def get_launch_properties(install_dir: Path, dev: bool) -> List[str]:
     if dev:
-        launch_properties_path: Path = install_dir / 'Ghidra' / 'RuntimeScripts' / 'Common' / 'support' / 'launch.properties'
+        launch_properties_path: Path = install_dir / 'Ghidra' / 'RuntimeScripts' / 'support' / 'launch.properties'
     else:
         launch_properties_path: Path = install_dir / 'support' / 'launch.properties'
     props: List[str] = []
@@ -103,6 +103,8 @@ def find_supported_python_exe(install_dir: Path, dev: bool) -> List[str]:
             if result.returncode == 0 and version in supported:
                 return cmd
         except FileNotFoundError:
+            pass
+        except NotADirectoryError:
             pass
         
     return None

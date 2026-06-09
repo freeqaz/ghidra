@@ -55,9 +55,9 @@ a specific need.
   * Free long term support (LTS) versions of JDK 21 are provided by:
     * [Adoptium Temurin](https://adoptium.net/temurin/releases)
     * [Amazon Corretto](https://docs.aws.amazon.com/corretto/latest/corretto-21-ug/downloads-list.html)
-* Python3 (3.9 to 3.13)
-  * Python 3.9 to 3.13 for [Debugger support](#debugger-notes)
-  * Python 3.9 to 3.13 for [PyGhidra support](#pyghidra-mode)
+* Python3 (3.9 to 3.14)
+  * Python 3.9 to 3.14 for [Debugger support](#debugger-notes)
+  * Python 3.9 to 3.14 for [PyGhidra support](#pyghidra-mode)
   * This is available from [Python.org](https://python.org) or most operating system's app stores or
     software repositories.  For Linux it is recommended that the system's package repository be used
     to install a suitable version of Python with pip support.
@@ -196,13 +196,15 @@ public Ghidra release includes native binaries for the following platforms:
 * Windows 10 or later, x86 64-bit
 * Windows 10 or later, ARM 64-bit (using x86 emulation)
 * Linux x86 64-bit
-* macOS x86 64-bit (may be omitted for some non-public builds)
-* macOS ARM 64-bit (may be omitted for some non-public builds)
 
 Ghidra supports running on the following additional platforms with user-built native binaries:
+* macOS x86 64-bit
+* macOS ARM 64-bit
 * Linux ARM 64-bit
 * FreeBSD x86 64-bit (no debugger support)
 * FreeBSD ARM 64-bit (no debugger support)
+* OpenBSD x86 64-bit (no debugger support)
+* OpenBSD ARM 64-bit (no debugger support)
 
 For supported systems where native binaries have not been supplied, or those that are supplied fail
 to run properly, it may be necessary to build the native Ghidra binaries. In order to build native
@@ -214,7 +216,7 @@ binaries for your platform, you will need the following installed on your system
     to the Internet, _Xcode_ (which includes the command tools) may be installed directly from the
     App Store while _Command Line Tools for Xcode_ may be installed using the command:
     `xcode-select --install`.
-  * __Linux/FreeBSD:__ the 64-bit versions of the following packages should installed:
+  * __Linux/FreeBSD/OpenBSD:__ the 64-bit versions of the following packages should installed:
     * GCC or Clang
     * make
   * __Windows:__

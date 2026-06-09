@@ -45,6 +45,8 @@ model {
 			targetPlatform "mac_arm_64"
 			targetPlatform "freebsd_x86_64"
 			targetPlatform "freebsd_arm_64"
+			targetPlatform "openbsd_x86_64"
+			targetPlatform "openbsd_arm_64"
 			sources {
 				cpp {
 					// NOTE: The bison/flex generated files are assumed to be up-to-date.
@@ -105,6 +107,7 @@ model {
 		                include "merge.cc"
 		                include "double.cc"
 		                include "constseq.cc"
+		                include "bitfield.cc"
 		                include "coreaction.cc"
 		                include "condexe.cc"
 		                include "override.cc"
@@ -156,6 +159,8 @@ model {
 			targetPlatform "mac_arm_64"
 			targetPlatform "freebsd_x86_64"
 			targetPlatform "freebsd_arm_64"
+			targetPlatform "openbsd_x86_64"
+			targetPlatform "openbsd_arm_64"
 			sources {
 				cpp {
 					// NOTE: The bison/flex generated files are assumed to be up-to-date.

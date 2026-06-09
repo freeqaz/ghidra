@@ -264,11 +264,11 @@ public class DWARFLine {
 		return endOffset;
 	}
 
-	public DWARFLineProgramExecutor getLineProgramexecutor(DWARFCompilationUnit cu,
-			BinaryReader reader) {
-		DWARFLineProgramExecutor lpe = new DWARFLineProgramExecutor(reader.clone(opcodes_start),
-			endOffset, cu.getPointerSize(), opcode_base, line_base, line_range,
-			minimum_instruction_length, default_is_stmt);
+	public DWARFLineProgramExecutor getLineProgramExecutor(DWARFCompilationUnit cu) {
+		DWARFLineProgramExecutor lpe = new DWARFLineProgramExecutor(
+			cu.getDIEContainer().getDebugLineReader().clone(opcodes_start), endOffset,
+			cu.getPointerSize(), opcode_base, line_base, line_range, minimum_instruction_length,
+			default_is_stmt, cu.getProgram().isAddr0Tombstone());
 
 		return lpe;
 	}
@@ -278,11 +278,20 @@ public class DWARFLine {
 	public record SourceFileAddr(long address, String fileName, byte[] md5, int lineNum,
 			boolean isEndSequence) {}
 
-	public List<SourceFileAddr> getAllSourceFileAddrInfo(DWARFCompilationUnit cu,
-			BinaryReader reader) throws IOException {
-		try (DWARFLineProgramExecutor lpe = getLineProgramexecutor(cu, reader)) {
+	public List<SourceFileAddr> getAllSourceFileAddrInfo(DWARFCompilationUnit cu)
+			throws IOException {
+		if (cu.getDIEContainer().getDebugLineReader() == null) {
+			return List.of();
+		}
+		try (DWARFLineProgramExecutor lpe = getLineProgramExecutor(cu)) {
 			List<SourceFileAddr> results = new ArrayList<>();
 			for (DWARFLineProgramState row : lpe.allRows()) {
+				if (row.tombstone) {
+					// skips elements that were based on tombstoned/dead code that wasn't included
+					// in final binary
+					cu.getProgram().getImportSummary().tombstonedSourceLineEntrySkippedCount++;
+					continue;
+				}
 				try {
 					DWARFFile file = getFile(row.file);
 					results.add(new SourceFileAddr(row.address, file.getPathName(this),

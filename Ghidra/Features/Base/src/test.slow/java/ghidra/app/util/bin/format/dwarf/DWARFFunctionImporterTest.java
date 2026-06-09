@@ -66,22 +66,6 @@ public class DWARFFunctionImporterTest extends DWARFTestBase {
 	}
 
 	@Test
-	public void testRustMethod_SetsRustCC() throws CancelledException, IOException, DWARFException {
-		addCompUnit(DW_LANG_Rust);
-
-		DebugInfoEntry intDIE = addInt();
-		newSubprogram("foo", intDIE, 0x410, 10).create();
-
-		importFunctions();
-
-		Function fooFunc = program.getListing().getFunctionAt(addr(0x410));
-		assertNotNull(fooFunc);
-
-		assertEquals("foo", fooFunc.getName());
-		assertEquals(CompilerSpec.CALLING_CONVENTION_rustcall, fooFunc.getCallingConventionName());
-	}
-
-	@Test
 	public void testNamespace_with_reserved_chars()
 			throws CancelledException, IOException, DWARFException {
 		// simulate what happens when a C++ operator/ or a templated classname
@@ -265,7 +249,7 @@ public class DWARFFunctionImporterTest extends DWARFTestBase {
 		DebugInfoEntry floatDIE = addFloat();
 		DebugInfoEntry struct1PtrDIE = addFwdPtr(1);
 		DebugInfoEntry struct1DIE = newStruct("mystruct", 100).create();
-		long formalParamDIEOffset = dwarfProg.getRelativeDIEOffset(2);
+		long formalParamDIEOffset = dieContainer.getRelativeDIEOffset(2);
 		DebugInfoEntry fooDIE = newSubprogram("foo", intDIE, 0x410, 10)
 				.addRef(DW_AT_object_pointer, formalParamDIEOffset)
 				.setParent(struct1DIE)

@@ -449,16 +449,12 @@ abstract class OperandFieldHelper extends FieldFactory {
 
 	private ListingField getFieldForInstruction(Instruction inst, ProxyObj<?> proxy, int varWidth) {
 		int numOperands = inst.getNumOperands();
-		if (numOperands == 0) {
-			return null;
-		}
 
 		OpFieldResults results = new OpFieldResults(proxy);
 		OperandFieldElement separator = createLeadingSeparatorElement(inst);
 		if (separator != null) {
 			results.add(separator);
 		}
-
 		for (int opIndex = 0; opIndex < numOperands; opIndex++) {
 			OpInfo opInfo = new OpInfo(inst, opIndex);
 			addOperandElements(opInfo, results);

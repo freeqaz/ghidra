@@ -18,6 +18,7 @@
 #include "double.hh"
 #include "subflow.hh"
 #include "constseq.hh"
+#include "bitfield.hh"
 
 namespace ghidra {
 
@@ -1503,9 +1504,37 @@ void ActionFuncLink::funcLinkInput(FuncCallSpecs *fc,Funcdata &data)
 	  loadval->setSpacebasePlaceholder();
 	  spacebase = (AddrSpace *)0;	// With a locked stack parameter, we don't need a stackplaceholder
 	}
+	continue;
       }
-      else
-	data.opInsertInput(op,data.newVarnode(param->getSize(),param->getAddress()),op->numInput());
+      if (spc->getType() == IPTR_JOIN) {
+	JoinRecord *join = data.getArch()->findJoin(off);
+	int4 index = -1;
+	if (join->getPiece(0).space->getType() == IPTR_SPACEBASE)
+	  index = 0;
+	else if (join->getPiece(join->numPieces()-1).space->getType() == IPTR_SPACEBASE)
+	  index = join->numPieces()-1;
+	if (index >= 0) {
+	  const VarnodeData &stack(join->getPiece(index));
+	  const VarnodeData &remain(data.getArch()->stripJoinPiece(join, index));
+	  Varnode *loadval = data.opStackLoad(stack.space,stack.offset,stack.size,op,(Varnode *)0,false);
+	  Varnode *remainval = data.newVarnode(remain.size, remain.space, remain.offset);
+	  PcodeOp *concatOp = data.newOp(2, op->getAddr());
+	  data.opSetOpcode(concatOp, CPUI_PIECE);
+	  if (index == 0) {
+	    data.opSetInput(concatOp,loadval,0);
+	    data.opSetInput(concatOp,remainval,1);
+	  }
+	  else {
+	    data.opSetInput(concatOp,remainval,0);
+	    data.opSetInput(concatOp,loadval,1);
+	  }
+	  Varnode *outvn = data.newUniqueOut(sz, concatOp);
+	  data.opInsertBefore(concatOp, op);
+	  data.opInsertInput(op,outvn,op->numInput());
+	  continue;
+	}
+      }
+      data.opInsertInput(op,data.newVarnode(param->getSize(),param->getAddress()),op->numInput());
     }
   }
   if (spacebase != (AddrSpace *)0)	// If we need it, create the stackplaceholder
@@ -1540,7 +1569,7 @@ void ActionFuncLink::funcLinkOutput(FuncCallSpecs *fc,Funcdata &data)
     Datatype *outtype = outparam->getType();
     if (outtype->getMetatype() != TYPE_VOID) {
       int4 sz = outparam->getSize();
-      if (sz == 1 && outtype->getMetatype() == TYPE_BOOL && data.isTypeRecoveryOn())
+      if (outtype->getMetatype() == TYPE_BOOL && data.isTypeRecoveryOn())
 	data.opMarkCalculatedBool(callop);
       Address addr = outparam->getAddress();
       if (addr.getSpace()->getType() == IPTR_SPACEBASE) {
@@ -1974,9 +2003,21 @@ int4 ActionRestrictLocal::apply(Funcdata &data)
     for(int4 j=0;j<numparam;++j) {
       ProtoParameter *param = fc->getParam(j);
       Address addr = param->getAddress();
-      if (addr.getSpace()->getType() != IPTR_SPACEBASE) continue;
-      uintb off = addr.getSpace()->wrapOffset(fc->getSpacebaseOffset() + addr.getOffset());
-      data.getScopeLocal()->markNotMapped(addr.getSpace(),off,param->getSize(),true);
+      spacetype tp = addr.getSpace()->getType();
+      if (tp == IPTR_SPACEBASE) {
+	uintb off = addr.getSpace()->wrapOffset(fc->getSpacebaseOffset() + addr.getOffset());
+	data.getScopeLocal()->markNotMapped(addr.getSpace(),off,param->getSize(),true);
+      }
+      else if (tp == IPTR_JOIN) {
+	JoinRecord *joinRec = data.getArch()->findJoin(addr.getOffset());
+	for(int4 k=0;k<joinRec->numPieces();++k) {
+	  const VarnodeData &vdata(joinRec->getPiece(k));
+	  if (vdata.space->getType() == IPTR_SPACEBASE) {
+	    uintb off = vdata.space->wrapOffset(fc->getSpacebaseOffset() + vdata.offset);
+	    data.getScopeLocal()->markNotMapped(vdata.space,off,vdata.size,true);
+	  }
+	}
+      }
     }
   }
 
@@ -2349,6 +2390,7 @@ int4 ActionDefaultParams::apply(Funcdata &data)
 void ActionSetCasts::checkPointerIssues(PcodeOp *op,Varnode *vn,Funcdata &data)
 
 {
+  if (op->doesSpecialPrinting()) return;
   Datatype *ptrtype = op->getIn(1)->getHighTypeReadFacing(op);
   int4 valsize = vn->getSize();
   if ((ptrtype->getMetatype()!=TYPE_PTR)|| (((TypePointer *)ptrtype)->getPtrTo()->getSize() != valsize)) {
@@ -2412,23 +2454,54 @@ bool ActionSetCasts::testStructOffset0(Datatype *reqtype,Datatype *curtype,CastS
   return (castStrategy->castStandard(reqtype, curtype, true, true) == (Datatype *)0);
 }
 
-/// \brief Try to adjust the input and output Varnodes to eliminate a CAST
+/// \brief Try to eliminate a CAST for a data-type needing resolution by matching the data-type needed by the p-code op
+///
+/// Merging can cause the high data-type to become unresolved even though the underlying data-type requires a specific
+/// resolution.  This forces the resolution onto the high, if possible, in the context of the specific read or write.
+/// \param dt is the data-type needed by the p-code op
+/// \param op is the p-code op
+/// \param slot is the index of the slot to test for resolution (-1 for output, >= 0 for input)
+/// \return \b true if the resolution was successfully changed and a CAST is not needed
+bool ActionSetCasts::tryResolutionAdjustment(Datatype *dt,PcodeOp *op,int4 slot,Funcdata &data)
+
+{
+  if (dt->needsResolution()) return false;
+  Varnode *vn = (slot < 0) ? op->getOut() : op->getIn(slot);
+  Datatype *curType = vn->getHigh()->getType();
+  if (!curType->needsResolution()) return false;
+  if (slot < 0 && curType->getMetatype() == TYPE_PTR) return false;	// Cannot take field of pointer during assignment
+  int4 fieldNum = curType->findCompatibleResolve(dt);
+  if (fieldNum < 0) return false;
+  TypeFactory *typegrp = data.getArch()->types;
+  ResolvedUnion resolve(curType,fieldNum,*typegrp);
+  if (!data.setUnionField(curType, op, slot, resolve))
+    return false;
+  if (slot >=0 && curType->getMetatype() == TYPE_PTR) {
+    if (vn->isWritten() && (vn->getDef()->code() != CPUI_PTRSUB || vn->getDef()->getIn(0)->getType() != curType)) {
+      // For pointers, if not already inserted, insert a PTRSUB representing the field access
+      PcodeOp *ptrsub = insertPtrsubZero(op,slot,resolve.getDatatype(),data);
+      data.setUnionField(curType, ptrsub,-1,resolve);			// Attach the resolution to the PTRSUB
+    }
+  }
+  return true;
+}
+
+/// \brief Try to adjust the input and output Varnodes to a COPY, in order to eliminate a CAST
 ///
 /// If input/output data-types are different, it may be due to late merges.  For
 /// unions, the CAST can sometimes be eliminated by adjusting the data-type resolutions
 /// of the Varnodes relative to the PcodeOp
-/// \param op is the PcodeOp reading the input Varnode and writing the output Varnode
-/// \param slot is the index of the input Varnode
+/// \param op is the COPY
 /// \param data is the function
 /// \return \b true if an adjustment is made so that a CAST is no longer needed
-bool ActionSetCasts::tryResolutionAdjustment(PcodeOp *op,int4 slot,Funcdata &data)
+bool ActionSetCasts::tryResolutionCopy(PcodeOp *op,Funcdata &data)
 
 {
   Varnode *outvn = op->getOut();
   if (outvn == (Varnode *)0)
     return false;
   Datatype *outType = outvn->getHigh()->getType();
-  Datatype *inType = op->getIn(slot)->getHigh()->getType();
+  Datatype *inType = op->getIn(0)->getHigh()->getType();
   if (!inType->needsResolution() && !outType->needsResolution()) return false;
   int4 inResolve = -1;
   int4 outResolve = -1;
@@ -2436,7 +2509,7 @@ bool ActionSetCasts::tryResolutionAdjustment(PcodeOp *op,int4 slot,Funcdata &dat
     inResolve = inType->findCompatibleResolve(outType);
     if (inResolve < 0) return false;
   }
-  if (outType->needsResolution()) {
+  if (outType->needsResolution()  && outType->getMetatype() != TYPE_PTR) {
     if (inResolve >= 0)
       outResolve = outType->findCompatibleResolve(inType->getDepend(inResolve));
     else
@@ -2445,12 +2518,12 @@ bool ActionSetCasts::tryResolutionAdjustment(PcodeOp *op,int4 slot,Funcdata &dat
   }
 
   TypeFactory *typegrp = data.getArch()->types;
-  if (inType->needsResolution()) {
+  if (inResolve >= 0) {
     ResolvedUnion resolve(inType,inResolve,*typegrp);
-    if (!data.setUnionField(inType, op, slot, resolve))
+    if (!data.setUnionField(inType, op, 0, resolve))
       return false;
   }
-  if (outType->needsResolution()) {
+  if (outResolve >= 0) {
     ResolvedUnion resolve(outType,outResolve,*typegrp);
     if (!data.setUnionField(outType, op, -1, resolve))
       return false;
@@ -2495,10 +2568,12 @@ int4 ActionSetCasts::resolveUnion(PcodeOp *op,int4 slot,Funcdata &data,CastStrat
   Datatype *dt = vn->getHigh()->getType();
   if (!dt->needsResolution())
     return 0;
-  if (dt != vn->getType())
+  const ResolvedUnion *resUnion = data.getUnionField(dt, op, slot);
+  if (resUnion == (ResolvedUnion *)0) {
     dt->resolveInFlow(op, slot);	// Last chance to resolve data-type based on flow
-  const ResolvedUnion *resUnion = data.getUnionField(dt, op,slot);
-  if (resUnion != (ResolvedUnion*)0 && resUnion->getFieldNum() >= 0) {
+    resUnion = data.getUnionField(dt, op, slot);
+  }
+  if (resUnion != (ResolvedUnion *)0 && resUnion->getFieldNum() >= 0) {
     if (dt->getMetatype() == TYPE_PTR) {
       // Test if a cast is still needed even after resolution
       Datatype *reqtype = vn->getTypeReadFacing(op);
@@ -2535,12 +2610,11 @@ int4 ActionSetCasts::castOutput(PcodeOp *op,Funcdata &data,CastStrategy *castStr
   Datatype *outct,*ct,*tokenct;
   Varnode *vn,*outvn;
   PcodeOp *newop;
-  Datatype *outHighType;
   bool force=false;
 
   tokenct = op->getOpcode()->getOutputToken(op,castStrategy);
   outvn = op->getOut();
-  outHighType = outvn->getHigh()->getType();
+  Datatype *outHighType = outvn->getHigh()->getType();
   if (tokenct == outHighType) {
     if (tokenct->needsResolution()) {
       // operation copies directly to outvn AS a union
@@ -2550,12 +2624,7 @@ int4 ActionSetCasts::castOutput(PcodeOp *op,Funcdata &data,CastStrategy *castStr
     // Short circuit more sophisticated casting tests.  If they are the same type, there is no cast
     return 0;
   }
-  Datatype *outHighResolve = outHighType;
-  if (outHighType->needsResolution()) {
-    if (outHighType != outvn->getType())
-      outHighType->resolveInFlow(op, -1);		// Last chance to resolve data-type based on flow
-    outHighResolve = outHighType->findResolve(op, -1);	// Finish fetching DefFacing data-type
-  }
+  Datatype *outHighResolve = outvn->getHighTypeDefFacing();
   if (outvn->isImplied()) {
     // implied varnode must have parse type
     if (outvn->isTypeLock()) {
@@ -2590,6 +2659,8 @@ int4 ActionSetCasts::castOutput(PcodeOp *op,Funcdata &data,CastStrategy *castStr
       ct = castStrategy->castStandard(outct,tokenct,false,true);
       if (ct == (Datatype *)0) return 0;
     }
+    if (tryResolutionAdjustment(tokenct, op, -1, data))
+      return 0;
   }
 				// Generate the cast op
   vn = data.newUnique(outvn->getSize());
@@ -2610,7 +2681,7 @@ int4 ActionSetCasts::castOutput(PcodeOp *op,Funcdata &data,CastStrategy *castStr
   if (tokenct->needsResolution())
     data.forceFacingType(tokenct, -1, newop, 0);
   if (outHighType->needsResolution())
-    data.inheritResolution(outHighType, newop, -1, op, -1);	// Inherit write resolution
+    data.inheritUnionField(outHighType, newop, -1, op, -1);	// Inherit write resolution
 
   return 1;
 }
@@ -2693,10 +2764,12 @@ int4 ActionSetCasts::castInput(PcodeOp *op,int4 slot,Funcdata &data,CastStrategy
     // Insert a PTRSUB(vn,#0) instead of a CAST
     newop = insertPtrsubZero(op, slot, ct, data);
     if (vn->getHigh()->getType()->needsResolution())
-      data.inheritResolution(vn->getHigh()->getType(),newop, 0, op, slot);
+      data.inheritUnionField(vn->getHigh()->getType(),newop, 0, op, slot);
     return 1;
   }
-  else if (tryResolutionAdjustment(op, slot, data)) {
+  else if (op->code() != CPUI_COPY && tryResolutionAdjustment(ct, op, slot, data))
+    return 1;
+  else if (op->code() == CPUI_COPY && tryResolutionCopy(op, data)) {
     return 1;
   }
   newop = data.newOp(1,op->getAddr());
@@ -2714,7 +2787,7 @@ int4 ActionSetCasts::castInput(PcodeOp *op,int4 slot,Funcdata &data,CastStrategy
     data.forceFacingType(ct, -1, newop, -1);
   }
   if (vn->getHigh()->getType()->needsResolution()) {
-    data.inheritResolution(vn->getHigh()->getType(),newop, 0, op, slot);
+    data.inheritUnionField(vn->getHigh()->getType(),newop, 0, op, slot);
   }
   return 1;
 }
@@ -2754,9 +2827,18 @@ int4 ActionSetCasts::apply(Funcdata &data)
 	    data.opSetOpcode(op, CPUI_INT_ADD);
 	}
       }
-      // Do input casts first, as output may depend on input
+      // Allow unresolved high data-types to resolve
       for(int4 i=0;i<op->numInput();++i) {
 	count += resolveUnion(op, i, data, castStrategy);
+      }
+      Varnode *vn = op->getOut();
+      if (vn != (Varnode *)0) {
+	Datatype *outHighType = vn->getHigh()->getType();
+	if (outHighType->needsResolution())
+	  outHighType->resolveInFlow(op, -1);		// Last chance to resolve data-type based on flow
+      }
+      // Do input casts first, as output may depend on input
+      for(int4 i=0;i<op->numInput();++i) {
 	count += castInput(op,i,data,castStrategy);
       }
       if (opc == CPUI_LOAD) {
@@ -2765,9 +2847,8 @@ int4 ActionSetCasts::apply(Funcdata &data)
       else if (opc == CPUI_STORE) {
 	checkPointerIssues(op, op->getIn(2), data);
       }
-      Varnode *vn = op->getOut();
-      if (vn == (Varnode *)0) continue;
-      count += castOutput(op,data,castStrategy);
+      if (vn != (Varnode *)0)
+	count += castOutput(op,data,castStrategy);
     }
   }
   return 0;			// Indicate full completion
@@ -3062,6 +3143,11 @@ int4 ActionMarkExplicit::baseExplicit(Varnode *vn,int4 maxref)
     return -1;
   }
   if (vn->hasNoDescend()) return -1;	// Must have at least one descendant
+  if (def->code() == CPUI_INSERT) {
+    PcodeOp *storeOp = def->getOut()->loneDescend();
+    if (storeOp == (PcodeOp *)0 || storeOp->code() != CPUI_STORE)
+      return -1;		// INSERT output is explicit unless it is immediately used by STORE
+  }
 
   if (def->code() == CPUI_PTRSUB) { // A dereference
     Varnode *basevn = def->getIn(0);
@@ -3466,12 +3552,11 @@ int4 ActionUnreachable::apply(Funcdata &data)
 int4 ActionDoNothing::apply(Funcdata &data)
 
 {				// Remove blocks that do nothing
-  int4 i;
   const BlockGraph &graph(data.getBasicBlocks());
-  BlockBasic *bb;
 
-  for(i=0;i<graph.getSize();++i) {
-    bb = (BlockBasic *) graph.getBlock(i);
+  for(int4 i=0;i<graph.getSize();++i) {
+    BlockBasic *bb = (BlockBasic *) graph.getBlock(i);
+    bb->clearDelayedDonothing();
     if (bb->isDoNothing()) {
       if ((bb->sizeOut()==1)&&(bb->getOut(0)==bb)) { // Infinite loop
 	if (!bb->isDonothingLoop()) {
@@ -3480,11 +3565,67 @@ int4 ActionDoNothing::apply(Funcdata &data)
 	}
       }
       else if (bb->unblockedMulti(0)) {
-	data.removeDoNothingBlock(bb);
-	count += 1;
-	return 0;
+	if (data.isNormalizationOn() || bb->hasNoImmediateCopy(0)) {
+	  data.removeDoNothingBlock(bb);
+	  count += 1;
+	  return 0;
+	}
+	else {
+	  // If there were immediate COPYs but the block was otherwise removable,
+	  // mark the block for possible late removal.
+	  bb->setDelayedDonothing();
+	}
       }
     }
+  }
+  return 0;
+}
+
+/// For each input to \b bl, check if all other out edges go to the same \e out block as \b bl.
+/// \param bl is the block being removed
+/// \return \b true if a redundancy would be created
+bool ActionLateDoNothing::removingCreatesRedundancy(FlowBlock *bl)
+
+{
+  FlowBlock *outbl = bl->getOut(0);
+  for(int4 i=0;i<bl->sizeIn();++i) {
+    FlowBlock *inbl = bl->getIn(i);
+    if (inbl->sizeOut() == 1) continue;
+    int4 count;
+    for(count=0;count<inbl->sizeOut();++count) {
+      FlowBlock *curbl = inbl->getOut(count);
+      if (curbl != bl && curbl != outbl)		// Check if this edge goes to outbl (possibly via bl)
+	break;
+    }
+    if (count == inbl->sizeOut())			// All edges lead to outbl
+      return true;
+  }
+  return false;
+}
+
+int4 ActionLateDoNothing::apply(Funcdata &data)
+
+{
+  const BlockGraph &graph(data.getBasicBlocks());
+  vector<BlockBasic *> removeList;
+
+  for(int4 i=0;i<graph.getSize();++i) {
+    BlockBasic *bb = (BlockBasic *) graph.getBlock(i);
+    if (!bb->isDelayedDonothing()) continue;
+    if (bb->isDoNothing()) {
+      if (removingCreatesRedundancy(bb)) continue;
+      if ((bb->sizeOut() == 1) && (bb->getOut(0) == bb)) { // Infinite loop
+	if (!bb->isDonothingLoop()) {
+	  bb->setDonothingLoop();
+	  data.warning("Do nothing block with infinite loop",bb->getStart());
+	}
+      }
+      else if (bb->unblockedMulti(0)) removeList.push_back(bb);
+    }
+  }
+  for(int4 i=0;i<removeList.size();++i) {
+    data.removeDoNothingBlock(removeList[i]);
+    count += 1;
   }
   return 0;
 }
@@ -3703,6 +3844,9 @@ void ActionDeadCode::propagateConsumed(vector<Varnode *> &worklist)
       if (sz > sizeof(uintb)) {	// If there exists bits beyond the precision of the consume field
 	if (sa >= 8*sizeof(uintb))
 	  a = ~((uintb)0);	// Make sure we assume one bits where we shift in unrepresented bits
+	else if (sa == 0) {
+	  a = outc;
+	}
 	else
 	  a = (outc >> sa) ^ ( (~((uintb)0)) << (8*sizeof(uintb)-sa));
 	sz = 8*sz -sa;
@@ -3763,10 +3907,11 @@ void ActionDeadCode::propagateConsumed(vector<Varnode *> &worklist)
     pushConsumed(b,op->getIn(2), worklist);
     pushConsumed(b,op->getIn(3), worklist);
     break;
-  case CPUI_EXTRACT:
+  case CPUI_ZPULL:
+  case CPUI_SPULL:
     a = 1;
     a <<= (int4)op->getIn(2)->getOffset();
-    a -= 1;	// Extract mask
+    a -= 1;	// Pull mask
     a &= outc;	// Consumed bits of mask
     a <<= (int4)op->getIn(1)->getOffset();
     pushConsumed(a,op->getIn(0),worklist);
@@ -5076,13 +5221,15 @@ bool ActionInferTypes::propagateTypeEdge(TypeFactory *typegrp,PcodeOp *op,int4 i
 {
   Varnode *invn,*outvn;
 
+  if (inslot == outslot) return false; // don't backtrack
   invn = (inslot==-1) ? op->getOut() : op->getIn(inslot);
   Datatype *alttype = invn->getTempType();
   if (alttype->needsResolution()) {
     // Always give incoming data-type a chance to resolve, even if it would not otherwise propagate
-    alttype = alttype->resolveInFlow(op, inslot);
+    Datatype *resType = alttype->resolveInFlow(op, inslot);
+    if (!op->isMarker())
+      alttype = resType;
   }
-  if (inslot == outslot) return false; // don't backtrack
   if (outslot < 0)
     outvn = op->getOut();
   else {
@@ -5425,7 +5572,7 @@ void ActionDatabase::buildDefaultGroups(void)
 			    "deadcode", "typerecovery", "stackptrflow",
 			    "blockrecovery", "stackvars", "deadcontrolflow", "switchnorm",
 			    "cleanup", "splitcopy", "splitpointer", "merge", "dynamic", "casts", "analysis",
-			    "fixateglobals", "fixateproto", "constsequence",
+			    "fixateglobals", "fixateproto", "constsequence", "bitfields",
 			    "segment", "returnsplit", "nodejoin", "doubleload", "doubleprecis",
 			    "unreachable", "subvar", "floatprecision",
 			    "conditionalexe", "" };
@@ -5502,10 +5649,10 @@ void ActionDatabase::universalAction(Architecture *conf)
       actmainloop->addAction( new ActionRestrictLocal("localrecovery") ); // Do before dead code removed
       actmainloop->addAction( new ActionDeadCode("deadcode") );
       actmainloop->addAction( new ActionDynamicMapping("dynamic") ); // Must come before restructurevarnode and infertypes
-      actmainloop->addAction( new ActionRestructureVarnode("localrecovery") );
       actmainloop->addAction( new ActionSpacebase("base") );	// Must come before infertypes and nonzeromask
       actmainloop->addAction( new ActionNonzeroMask("analysis") );
       actmainloop->addAction( new ActionInferTypes("typerecovery") );
+      actmainloop->addAction( new ActionRestructureVarnode("localrecovery") );
       actstackstall = new ActionGroup(Action::rule_repeatapply,"stackstall");
       {
 	actprop = new ActionPool(Action::rule_repeatapply,"oppool1");
@@ -5708,11 +5855,17 @@ void ActionDatabase::universalAction(Architecture *conf)
     actcleanup->addRule( new RuleSplitStore("splitpointer") );
     actcleanup->addRule( new RuleStringCopy("constsequence"));
     actcleanup->addRule( new RuleStringStore("constsequence"));
+    actcleanup->addRule( new RuleBitFieldStore("bitfields"));
+    actcleanup->addRule( new RuleBitFieldOut("bitfields"));
+    actcleanup->addRule( new RuleBitFieldLoad("bitfields"));
+    actcleanup->addRule( new RuleBitFieldIn("bitfields"));
+    actcleanup->addRule( new RulePullAbsorb("bitfields"));
+    actcleanup->addRule( new RuleInsertAbsorb("bitfields"));
   }
   act->addAction( actcleanup );
 
-  act->addAction( new ActionPreferComplement("blockrecovery") );
-  act->addAction( new ActionStructureTransform("blockrecovery") );
+  act->addAction( new ActionPreferComplement("blockrecovery", true) );
+  act->addAction( new ActionStructureTransform("blockrecovery", true) );	// Allow mods
   act->addAction( new ActionNormalizeBranches("normalizebranches") );
   act->addAction( new ActionAssignHigh("merge") );
   act->addAction( new ActionMergeRequired("merge") );
@@ -5727,6 +5880,10 @@ void ActionDatabase::universalAction(Architecture *conf)
   act->addAction( new ActionMergeType("merge") );
   act->addAction( new ActionHideShadow("merge") );
   act->addAction( new ActionCopyMarker("merge") );
+  act->addAction( new ActionLateDoNothing("blockrecovery") );
+  act->addAction( new ActionBlockStructure("blockrecovery") );
+  act->addAction( new ActionPreferComplement("blockrecovery", false) );		// Don't allow mods
+  act->addAction( new ActionStructureTransform("blockrecovery", false) );	// Don't allow mods
   act->addAction( new ActionOutputPrototype("localrecovery") );
   act->addAction( new ActionInputPrototype("fixateproto") );
   act->addAction( new ActionMapGlobals("fixateglobals") );

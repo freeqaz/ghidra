@@ -31,18 +31,16 @@ import org.apache.logging.log4j.*;
 import ghidra.framework.remote.GhidraPrincipal;
 import ghidra.framework.remote.SignatureCallback;
 import ghidra.net.*;
-import ghidra.server.RepositoryManager;
 import ghidra.server.UserManager;
+import ghidra.server.remote.RemoteLoggingUtil;
 
 /**
  * <code>PKIAuthenticationModule</code> performs client authentication through the 
  * use of a dual-signed token.  
  */
 public class PKIAuthenticationModule implements AuthenticationModule {
-	static final Logger log = LogManager.getLogger(PKIAuthenticationModule.class);
 
-	private static final long MAX_TOKEN_TIME = 5 * 60000; // 5-minutes
-	private static final int TOKEN_SIZE = 64;
+	static final Logger log = LogManager.getLogger(PKIAuthenticationModule.class);
 
 	private X500Principal[] authorities; // imposed on client certificate
 	private boolean anonymousAllowed;
@@ -70,7 +68,7 @@ public class PKIAuthenticationModule implements AuthenticationModule {
 	public Callback[] getAuthenticationCallbacks() {
 		SignatureCallback sigCb;
 		try {
-			byte[] token = TokenGenerator.getNewToken(TOKEN_SIZE);
+			byte[] token = TokenGenerator.getNewToken();
 			boolean usingSelfSignedCert =
 				DefaultKeyManagerFactory.usingGeneratedSelfSignedCertificate();
 			SignedToken signedToken = DefaultKeyManagerFactory
@@ -121,14 +119,14 @@ public class PKIAuthenticationModule implements AuthenticationModule {
 		try {
 
 			byte[] token = sigCb.getToken();
-
-			if (!TokenGenerator.isRecentToken(token, MAX_TOKEN_TIME)) {
+			if (!TokenGenerator.isValidToken(token)) {
 				throw new FailedLoginException("Stale Signature callback");
 			}
 
 			boolean usingSelfSignedCert =
 				DefaultKeyManagerFactory.usingGeneratedSelfSignedCertificate();
-			if (!DefaultKeyManagerFactory.isMySignature(usingSelfSignedCert ? null : authorities,
+			if (!DefaultKeyManagerFactory.isMySignature(
+				usingSelfSignedCert ? null : DefaultTrustManagerFactory.getTrustedIssuers(),
 				token, sigCb.getServerSignature())) {
 				throw new FailedLoginException("Invalid Signature callback");
 			}
@@ -141,14 +139,14 @@ public class PKIAuthenticationModule implements AuthenticationModule {
 			DefaultTrustManagerFactory.validateClient(certChain, PKIUtils.RSA_TYPE);
 
 			byte[] sigBytes = sigCb.getSignature();
-			if (sigBytes != null) {
-
-				Signature sig = Signature.getInstance(certChain[0].getSigAlgName());
-				sig.initVerify(certChain[0]);
-				sig.update(token);
-				if (!sig.verify(sigBytes)) {
-					throw new FailedLoginException("Incorrect signature");
-				}
+			if (sigBytes == null) {
+				throw new FailedLoginException("Client signature required");
+			}
+			Signature sig = Signature.getInstance(certChain[0].getSigAlgName());
+			sig.initVerify(certChain[0]);
+			sig.update(token);
+			if (!sig.verify(sigBytes)) {
+				throw new FailedLoginException("Incorrect signature");
 			}
 
 			String dnUsername =
@@ -184,7 +182,7 @@ public class PKIAuthenticationModule implements AuthenticationModule {
 			}
 
 			if (UserManager.ANONYMOUS_USERNAME.equals(username)) {
-				RepositoryManager.log(null, null, "Anonymous access allowed for: " +
+				RemoteLoggingUtil.log("Anonymous access allowed for: " +
 					certChain[0].getSubjectX500Principal().toString(), user.getName());
 			}
 

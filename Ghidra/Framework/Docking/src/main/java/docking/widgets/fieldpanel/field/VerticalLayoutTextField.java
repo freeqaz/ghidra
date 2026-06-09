@@ -136,7 +136,7 @@ public class VerticalLayoutTextField implements TextField {
 		for (int i = 0; i < n; i++) {
 			String text = elements.get(i).getText();
 			buf.append(text);
-			if (!text.endsWith(delimiter)) { // prevent 2 spaces between merged lines
+			if (!text.endsWith(delimiter)) { // prevent 2 delimiters between merged lines
 				buf.append(delimiter);
 			}
 		}
@@ -326,7 +326,7 @@ public class VerticalLayoutTextField implements TextField {
 				for (Highlight highlight : highlights) {
 					highlight.setOffset(-columns);
 				}
-				subField.paintSelection(g, colorManager, i, rowHeight);
+				subField.paintSelection(g, colorManager, i, subFieldHeight);
 				subField.paintHighlights(g, highlights);
 				subField.paintText(c, g, context);
 				if (cursorRow == i) {

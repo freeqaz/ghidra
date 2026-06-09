@@ -84,6 +84,8 @@ model {
 			targetPlatform "mac_arm_64"
 			targetPlatform "freebsd_x86_64"
 			targetPlatform "freebsd_arm_64"
+			targetPlatform "openbsd_x86_64"
+			targetPlatform "openbsd_arm_64"
 			sources {
 				c {
 					source {
@@ -108,6 +110,8 @@ model {
 			targetPlatform "mac_arm_64"
 			targetPlatform "freebsd_x86_64"
 			targetPlatform "freebsd_arm_64"
+			targetPlatform "openbsd_x86_64"
+			targetPlatform "openbsd_arm_64"
 			sources {
 				c {
 					source {
@@ -135,6 +139,7 @@ model {
 			if (version.equals(v41)) {
 				if (toolChain in Gcc) {			
 					//cCompiler.args "-DCP_DEMANGLE_DEBUG"
+					cCompiler.args "-std=gnu17"
 					cCompiler.args "-DHAVE_STDLIB_H"
 					cCompiler.args "-DHAVE_STRING_H"
 				}
@@ -151,6 +156,7 @@ model {
 			else if (version.equals(v24)) {
 				if (toolChain in Gcc) {
 					cCompiler.args "-DMAIN_CPLUS_DEM"
+					cCompiler.args "-std=gnu17"
 					cCompiler.args "-DHAVE_STDLIB_H"
 					cCompiler.args "-DHAVE_STRING_H"
 				}
