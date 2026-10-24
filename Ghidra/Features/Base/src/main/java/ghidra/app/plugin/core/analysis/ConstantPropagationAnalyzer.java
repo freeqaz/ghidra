@@ -357,15 +357,10 @@ public class ConstantPropagationAnalyzer extends AbstractAnalyzer {
 			}
 		};
 
-		// bound check thread limit
-		if (maxThreadCount > pool.getMaxThreadCount() || maxThreadCount < 1) {
-			maxThreadCount = 1;
-		}
-
 		// @formatter:off
 		ConcurrentQ<Address, AddressSetView> queue = new ConcurrentQBuilder<Address, AddressSetView>()
 			.setThreadPool(pool)
-			.setMaxInProgress(maxThreadCount)
+			.setMaxInProgress(boundThreadCount(maxThreadCount, pool.getMaxThreadCount()))
 			.setMonitor(monitor)
 			.build(callback);
 		// @formatter:on
@@ -441,6 +436,20 @@ public class ConstantPropagationAnalyzer extends AbstractAnalyzer {
 				todoSet.delete(start,start);
 			}
 		}
+	}
+
+	/**
+	 * Bound a configured thread count by the shared pool's size.
+	 * <p>
+	 * A count above the pool is clamped to the pool rather than dropped to one thread, and
+	 * the configured option value is left as set.
+	 *
+	 * @param configured the configured maximum thread count
+	 * @param poolMax the shared analysis pool's maximum thread count
+	 * @return the number of threads to use, at least one
+	 */
+	static int boundThreadCount(int configured, int poolMax) {
+		return Math.max(1, Math.min(configured, poolMax));
 	}
 
 	/**
